@@ -1,24 +1,73 @@
-import { RedirectToSignIn, SignedIn, SignedOut, UserButton, useAuth } from "@clerk/nextjs";
+import { RedirectToSignIn, SignedIn, SignedOut, useAuth, useUser } from "@clerk/nextjs";
 import { useState } from "react";
 
-import AnalysisCards from "../components/AnalysisCards";
+import AnalysisReport from "../components/AnalysisReport";
+import AppShell from "../components/AppShell";
 import IncidentInput from "../components/IncidentInput";
-import { analyzeIncident } from "../lib/api";
+import InvestigationStreamPanel from "../components/InvestigationStreamPanel";
+import RunTimeline from "../components/RunTimeline";
+import { useAnalyzeSession } from "../context/AnalyzeSessionContext";
+import { createIncident, pollJobUntilDone, streamJobUntilTerminal } from "../lib/api";
 import { isClerkEnabled } from "../lib/clerk";
 
 const clerkEnabled = isClerkEnabled();
 
-function UnauthenticatedHome() {
+async function runIncidentAnalysis(payload, getToken, onLiveEvents) {
+  const token = clerkEnabled && getToken ? await getToken() : null;
+  const created = await createIncident(payload, token);
+
+  const collected = [];
+  let finalJob = null;
+  try {
+    finalJob = await streamJobUntilTerminal(created.job_id, token, {
+      onEvent: (p) => {
+        if (p.event) {
+          collected.push(p.event);
+          if (onLiveEvents) onLiveEvents([...collected]);
+        }
+        if (p.terminal && p.job) {
+          finalJob = p.job;
+        }
+      },
+    });
+  } catch {
+    /* fall back to polling */
+  }
+
+  if (!finalJob) {
+    finalJob = await pollJobUntilDone(created.job_id, token);
+  }
+
+  const events =
+    finalJob?.pipeline_events?.length >= collected.length ? finalJob.pipeline_events : collected.length ? collected : finalJob?.pipeline_events || [];
+
+  return { job: finalJob, events };
+}
+
+function HomeContent({ getToken = null, userProfile = null }) {
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [result, setResult] = useState(null);
+  const {
+    result,
+    setResult,
+    pipelineEvents,
+    setPipelineEvents,
+    error,
+    setError,
+    draft,
+    updateDraft,
+    clearAnalysis,
+  } = useAnalyzeSession();
 
   async function onAnalyze(payload) {
     setLoading(true);
     setError("");
+    updateDraft({ title: payload.title, source: payload.source, text: payload.text });
+    setResult(null);
+    setPipelineEvents([]);
     try {
-      const data = await analyzeIncident(payload, null);
-      setResult(data);
+      const { job, events } = await runIncidentAnalysis(payload, getToken, (live) => setPipelineEvents(live));
+      setResult(job);
+      setPipelineEvents(events);
     } catch (err) {
       setError(err.message || "Failed to analyze incident");
     } finally {
@@ -26,62 +75,69 @@ function UnauthenticatedHome() {
     }
   }
 
+  const canClear = !!(draft.text.trim() || result || pipelineEvents.length || error);
+
   return (
-    <main className="container stack gap">
-      <header className="hero card row between">
+    <AppShell activeHref="/">
+      <header className="page-header">
         <div>
-          <h1>Odyssey Sentinel</h1>
-          <p>AI-Powered Observability and Incident Intelligence Platform</p>
-          <p className="muted">Clerk is disabled until real keys are configured.</p>
+          <p className="eyebrow">Incident intelligence</p>
+          <h1 className="page-title">Command center</h1>
+          <p className="page-sub muted">Submit logs, then follow the live pipeline. Charts and file export are on the Dashboard.</p>
         </div>
-        <a href="/dashboard" className="btn btn-link">Dashboard</a>
+        <div className="page-header-actions">
+          {!clerkEnabled ? <p className="muted small">Local mode: auth disabled.</p> : null}
+        </div>
       </header>
 
-      <IncidentInput onAnalyze={onAnalyze} loading={loading} />
-      {error ? <p className="error">{error}</p> : null}
-      <AnalysisCards result={result} />
-    </main>
+      <div className="analyze-grid">
+        <div className="analyze-col analyze-col-input">
+          <IncidentInput
+            onAnalyze={onAnalyze}
+            loading={loading}
+            draft={draft}
+            onDraftChange={updateDraft}
+            onClear={() => clearAnalysis()}
+            canClear={canClear}
+          />
+          {error ? <p className="error compact">{error}</p> : null}
+        </div>
+        <div className="analyze-col analyze-col-run">
+          <RunTimeline job={result} pipelineEvents={pipelineEvents} running={loading} />
+        </div>
+      </div>
+
+      <p className="muted small" style={{ marginTop: 8 }}>
+        After a run finishes, open the{" "}
+        <a className="link-subtle" href="/dashboard">
+          Dashboard
+        </a>{" "}
+        for log charts and exports.
+      </p>
+
+      <AnalysisReport result={result} getToken={getToken} userProfile={userProfile} showExport={false} />
+
+      <InvestigationStreamPanel
+        job={result}
+        getToken={getToken}
+        disabled={loading || !result || result.status !== "completed"}
+      />
+    </AppShell>
   );
+}
+
+function UnauthenticatedHome() {
+  return <HomeContent />;
 }
 
 function AuthenticatedHome() {
   const { getToken } = useAuth();
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [result, setResult] = useState(null);
-
-  async function onAnalyze(payload) {
-    setLoading(true);
-    setError("");
-    try {
-      const token = await getToken();
-      const data = await analyzeIncident(payload, token);
-      setResult(data);
-    } catch (err) {
-      setError(err.message || "Failed to analyze incident");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <main className="container stack gap">
-      <header className="hero card row between">
-        <div>
-          <h1>Odyssey Sentinel</h1>
-          <p>AI-Powered Observability and Incident Intelligence Platform</p>
-        </div>
-        <div className="row gap">
-          <a href="/dashboard" className="btn btn-link">Dashboard</a>
-          <UserButton afterSignOutUrl="/" />
-        </div>
-      </header>
-
-      <IncidentInput onAnalyze={onAnalyze} loading={loading} />
-      {error ? <p className="error">{error}</p> : null}
-      <AnalysisCards result={result} />
-    </main>
-  );
+  const { user } = useUser();
+  const userProfile = user ? {
+    email: user.primaryEmailAddress?.emailAddress || "",
+    name: user.fullName || user.username || "",
+  } : null;
+  return <HomeContent getToken={getToken} userProfile={userProfile} />;
 }
 
 export default function Home() {

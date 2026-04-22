@@ -61,6 +61,10 @@ class RemediationPlan(BaseModel):
     recommended_actions: list[str] = Field(default_factory=list)
     next_checks: list[str] = Field(default_factory=list)
     risk_if_unresolved: str
+    # LLM-assigned severity per action, parallel to recommended_actions / next_checks.
+    # Pipeline pads any missing entries with the incident severity before seeding.
+    recommended_severities: list[str] = Field(default_factory=list)
+    check_severities: list[str] = Field(default_factory=list)
 
 
 class IncidentAnalysis(BaseModel):
@@ -92,3 +96,72 @@ class JobRunResponse(BaseModel):
     status: str
     analysis: IncidentAnalysis | None = None
     error: str | None = None
+
+
+class InvestigationStreamInput(BaseModel):
+    """Payload to stream investigator output (for live RCA preview)."""
+
+    summary: str
+    normalized_text: str
+    evidence_snippets: list[str] = Field(default_factory=list)
+
+
+class ClarificationQuestion(BaseModel):
+    """A targeted question to gather context for refining the remediation plan."""
+
+    id: str
+    question: str
+    rationale: str
+    kind: Literal["text", "yes_no", "choice"] = "text"
+    options: list[str] | None = None
+
+
+class ClarificationSet(BaseModel):
+    """Set of clarification questions generated after initial analysis."""
+
+    job_id: str
+    questions: list[ClarificationQuestion]
+    urgency: Literal["suggested", "required"] = "suggested"
+    already_answered: bool = False
+
+
+class ClarificationAnswers(BaseModel):
+    """User-provided answers to clarification questions."""
+
+    answers: dict[str, str]
+
+
+class ActionUpdate(BaseModel):
+    status: str | None = None
+    assigned_to: str | None = None
+    notes: str | None = None
+    severity: str | None = None
+    due_date: str | None = None
+
+
+class ChatMessage(BaseModel):
+    role: str  # "user" or "assistant"
+    content: str
+
+
+class ActionChatRequest(BaseModel):
+    message: str
+    history: list[ChatMessage] = []
+
+
+class FollowUpCreate(BaseModel):
+    user_email: str
+    remind_at: str  # ISO-8601 datetime
+    action_id: str | None = None
+    user_name: str | None = None
+    message: str | None = None
+
+
+class IntegrationCreate(BaseModel):
+    type: str
+    config: dict
+    enabled: bool = True
+
+
+class DigestRequest(BaseModel):
+    days: int = 7

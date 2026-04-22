@@ -1,22 +1,28 @@
-import { useRef, useState } from "react";
+import { useRef } from "react";
 
-export default function IncidentInput({ onAnalyze, loading }) {
-  const [title, setTitle] = useState("Production incident");
-  const [source, setSource] = useState("manual");
-  const [text, setText] = useState("");
+export default function IncidentInput({ onAnalyze, loading, draft, onDraftChange, onClear, canClear }) {
   const fileRef = useRef(null);
 
   async function onFileChange(event) {
     const file = event.target.files?.[0];
     if (!file) return;
-    const value = await file.text();
-    setText(value);
-    setSource("upload");
+    let value = await file.text();
+    const name = file.name.toLowerCase();
+    const looksJson = file.type === "application/json" || name.endsWith(".json");
+    if (looksJson) {
+      try {
+        value = JSON.stringify(JSON.parse(value), null, 2);
+      } catch {
+        /* keep raw if not valid JSON */
+      }
+    }
+    onDraftChange({ text: value, source: "upload" });
+    event.target.value = "";
   }
 
   function submit(event) {
     event.preventDefault();
-    onAnalyze({ title: title.trim(), source, text: text.trim() });
+    onAnalyze({ title: draft.title.trim(), source: draft.source, text: draft.text.trim() });
   }
 
   return (
@@ -26,14 +32,18 @@ export default function IncidentInput({ onAnalyze, loading }) {
         Incident Title
         <input
           className="input"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
+          value={draft.title}
+          onChange={(e) => onDraftChange({ title: e.target.value })}
           maxLength={200}
         />
       </label>
       <label>
         Incident Source
-        <select className="input" value={source} onChange={(e) => setSource(e.target.value)}>
+        <select
+          className="input"
+          value={draft.source}
+          onChange={(e) => onDraftChange({ source: e.target.value })}
+        >
           <option value="manual">Manual paste</option>
           <option value="upload">File upload</option>
           <option value="monitoring">Monitoring export</option>
@@ -43,19 +53,38 @@ export default function IncidentInput({ onAnalyze, loading }) {
         Paste Logs / Incident Text
         <textarea
           className="input textarea"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
+          value={draft.text}
+          onChange={(e) => onDraftChange({ text: e.target.value })}
           placeholder="Paste logs, stack trace, and context here..."
           required
         />
       </label>
-      <div className="row gap">
-        <button type="button" className="btn btn-muted" onClick={() => fileRef.current?.click()}>
-          Upload Log File
+      <div className="row gap wrap-actions">
+        <button
+          type="button"
+          className="btn btn-muted"
+          onClick={() => fileRef.current?.click()}
+        >
+          Upload .txt or .json
         </button>
-        <input ref={fileRef} type="file" accept=".txt,.log,.md,.json" hidden onChange={onFileChange} />
-        <button type="submit" className="btn" disabled={loading || !text.trim()}>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="text/plain,application/json,.txt,.text,.log,.md,.json"
+          hidden
+          onChange={onFileChange}
+        />
+        <button type="submit" className="btn" disabled={loading || !draft.text.trim()}>
           {loading ? "Analyzing..." : "Analyze Incident"}
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={() => onClear()}
+          disabled={!canClear}
+          title="Clear form and analysis state"
+        >
+          Clear
         </button>
       </div>
     </form>

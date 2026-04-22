@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from common.models import Confidence, IncidentSummary, RemediationPlan, RootCauseAnalysis, Severity
+from common.models import ClarificationQuestion, Confidence, IncidentSummary, RemediationPlan, RootCauseAnalysis, Severity
 
 
 def classify_severity(text: str) -> tuple[Severity, str]:
@@ -139,3 +139,107 @@ def confidence_to_score(conf: Confidence) -> int:
     """Map confidence levels to integer for UI sorting/filters."""
 
     return {"low": 1, "medium": 2, "high": 3}[conf]
+
+
+def generate_questions(root: RootCauseAnalysis, evidence: list[str]) -> list[ClarificationQuestion]:
+    """Generate targeted clarification questions based on root-cause and confidence level."""
+
+    questions: list[ClarificationQuestion] = []
+    cause = root.likely_root_cause.lower()
+
+    if root.confidence == "low":
+        questions.append(ClarificationQuestion(
+            id="recent_changes",
+            question="Were there any deployments, config changes, or infrastructure updates in the 24 hours before this incident?",
+            rationale="Recent changes are the most common trigger for incidents and enable specific rollback steps.",
+            kind="yes_no",
+        ))
+        questions.append(ClarificationQuestion(
+            id="additional_context",
+            question="Can you share any related metrics (CPU, memory, request rate) or additional log context around the time of the incident?",
+            rationale="Extra context significantly improves root-cause confidence and produces more specific remediation steps.",
+            kind="text",
+        ))
+
+    if "auth" in cause or "permission" in cause:
+        questions.append(ClarificationQuestion(
+            id="credential_rotation",
+            question="Were any IAM roles, API keys, or service account credentials recently rotated or revoked?",
+            rationale="Knowing whether credential rotation occurred narrows the fix to reverting a specific secret vs. diagnosing misconfiguration.",
+            kind="yes_no",
+        ))
+        questions.append(ClarificationQuestion(
+            id="affected_service",
+            question="Which specific service or API endpoint is generating the auth failures?",
+            rationale="Pinpointing the failing endpoint allows targeted IAM policy validation and a precise fix.",
+            kind="text",
+        ))
+
+    elif "database" in cause:
+        questions.append(ClarificationQuestion(
+            id="db_change",
+            question="Was there a recent database migration, schema change, connection pool config update, or infrastructure change?",
+            rationale="DB-level changes are a primary cause of connectivity failures and knowing this guides the rollback target.",
+            kind="yes_no",
+        ))
+        questions.append(ClarificationQuestion(
+            id="db_type",
+            question="What type of database is affected?",
+            rationale="Fix approaches differ significantly between RDS, Aurora, DynamoDB, Redis, and self-managed databases.",
+            kind="choice",
+            options=["PostgreSQL / RDS", "MySQL / RDS", "Aurora", "DynamoDB", "Redis / ElastiCache", "MongoDB", "Other"],
+        ))
+
+    elif "timeout" in cause or "latency" in cause:
+        questions.append(ClarificationQuestion(
+            id="downstream_service",
+            question="Which downstream service or dependency was slow or timing out (if known)?",
+            rationale="Naming the dependency enables targeted circuit-breaker or scaling steps instead of generic advice.",
+            kind="text",
+        ))
+        questions.append(ClarificationQuestion(
+            id="traffic_spike",
+            question="Was this incident associated with a traffic spike or a scheduled batch job?",
+            rationale="Traffic-driven timeouts require scaling and rate-limiting fixes; dependency-driven timeouts call for circuit breakers.",
+            kind="yes_no",
+        ))
+
+    elif "memory" in cause:
+        questions.append(ClarificationQuestion(
+            id="recent_deploy",
+            question="Has this service had a new deployment or significant traffic growth in the last 48 hours?",
+            rationale="New deployments may introduce memory leaks; traffic growth may require resource limit increases.",
+            kind="yes_no",
+        ))
+        questions.append(ClarificationQuestion(
+            id="workload_type",
+            question="What type of workload is the affected process?",
+            rationale="Memory management strategies differ significantly by workload type.",
+            kind="choice",
+            options=["Web server / API", "Batch / ETL job", "ML inference", "Stream processor", "Background worker", "Other"],
+        ))
+
+    elif "rate" in cause or "quota" in cause or "throttl" in cause:
+        questions.append(ClarificationQuestion(
+            id="traffic_source",
+            question="Is the rate limiting coming from a single client/consumer or broadly across all traffic?",
+            rationale="Single-consumer spikes need client-side backoff; broad limits need quota increases or traffic sharding.",
+            kind="choice",
+            options=["Single client / consumer", "Multiple clients", "All traffic broadly", "Unknown"],
+        ))
+        questions.append(ClarificationQuestion(
+            id="quota_owner",
+            question="Is this an external API quota (e.g. AWS, third-party) or an internal rate limit you control?",
+            rationale="External quotas require a quota increase request; internal limits can be tuned immediately.",
+            kind="choice",
+            options=["External API quota (AWS, third-party)", "Internal rate limit we control", "Unsure"],
+        ))
+
+    # Deduplicate by id while preserving order
+    seen: set[str] = set()
+    unique: list[ClarificationQuestion] = []
+    for q in questions:
+        if q.id not in seen:
+            seen.add(q.id)
+            unique.append(q)
+    return unique
