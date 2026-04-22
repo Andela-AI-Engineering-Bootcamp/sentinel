@@ -1,8 +1,0 @@
-aws_region         = "us-east-1"
-sqs_queue_name     = "sentinel-analysis-jobs"
-aurora_cluster_arn = "arn:aws:rds:us-east-1:123456789012:cluster:sentinel-aurora-cluster"
-aurora_secret_arn  = "arn:aws:secretsmanager:us-east-1:123456789012:secret:sentinel-aurora-credentials-xxxxx"
-bedrock_region     = "us-east-1"
-root_cause_model   = "us.amazon.nova-pro-v1:0"
-remediation_model  = "us.amazon.nova-pro-v1:0"
-support_model      = "openai.gpt-oss-120b-1:0"

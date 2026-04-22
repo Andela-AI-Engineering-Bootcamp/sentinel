@@ -1,2 +1,69 @@
+# Node
 node_modules/
+
+# Env files
 .env
+.env.*
+!.env.example
+
+# Terraform variables (secrets)
+*.tfvars
+!*.tfvars.example
+
+# Python virtual envs
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Python cache / build
+__pycache__/
+*.py[codz]
+*$py.class
+*.so
+
+# Build / dist
+build/
+dist/
+.eggs/
+*.egg-info/
+
+# Logs
+*.log
+
+# Jupyter
+.ipynb_checkpoints
+
+# OS
+.DS_Store
+
+# Terraform
+.terraform/
+terraform.tfstate.d/
+*.tfstate
+*.tfstate.backup
+
+# Lambda
+lambda_function.zip
+backend/**/*_lambda.zip
+!backend/scheduler/lambda_function.zip
+
+# Misc
+.coverage
+.cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.pytype/
+
+# Cursor
+.cursorignore
+.cursorindexingignore
+
+# Marimo
+marimo/_static/
+marimo/_lsp/
+__marimo__/

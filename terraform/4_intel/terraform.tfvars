@@ -1,6 +1,0 @@
-aws_region       = "us-east-1"
-service_name     = "sentinel-intel"
-ecr_repo_name    = "sentinel-intel"
-image_identifier = "123456789012.dkr.ecr.us-east-1.amazonaws.com/sentinel-intel:latest"
-bedrock_region   = "us-east-1"
-support_model_id = "openai.gpt-oss-120b-1:0"

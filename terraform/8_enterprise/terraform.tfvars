@@ -1,5 +1,0 @@
-aws_region          = "us-east-1"
-planner_lambda_name = "sentinel-planner"
-api_lambda_name     = "sentinel-api"
-sqs_queue_name      = "sentinel-analysis-jobs"
-alarm_email         = ""

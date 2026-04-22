@@ -1,5 +1,0 @@
-aws_region             = "us-east-1"
-endpoint_name          = "sentinel-embedding-endpoint"
-model_name             = "sentinel-embedding-model"
-endpoint_config_name   = "sentinel-embedding-endpoint-config"
-hf_model_id            = "sentence-transformers/all-MiniLM-L6-v2"
