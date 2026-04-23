@@ -25,6 +25,8 @@ class GuardrailReport(BaseModel):
 
     prompt_injection_detected: bool = False
     blocked_patterns: list[str] = Field(default_factory=list)
+    xss_detected: bool = False
+    xss_patterns_removed: list[str] = Field(default_factory=list)
     input_truncated: bool = False
     unsafe_content_removed: bool = False
     notes: list[str] = Field(default_factory=list)
@@ -140,13 +142,13 @@ class ActionUpdate(BaseModel):
 
 
 class ChatMessage(BaseModel):
-    role: str  # "user" or "assistant"
-    content: str
+    role: Literal["user", "assistant"]  # system turns are never accepted from clients
+    content: str = Field(min_length=1, max_length=4000)
 
 
 class ActionChatRequest(BaseModel):
-    message: str
-    history: list[ChatMessage] = []
+    message: str = Field(min_length=1, max_length=4000)
+    history: list[ChatMessage] = Field(default_factory=list, max_length=100)
 
 
 class FollowUpCreate(BaseModel):

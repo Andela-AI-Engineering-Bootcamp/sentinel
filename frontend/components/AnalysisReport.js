@@ -11,6 +11,7 @@ import {
   streamActionChat,
   updateRemediationAction,
 } from "../lib/api";
+import { detectChatInjection } from "../lib/contentGuard";
 
 // ── Chat drawer
 
@@ -63,6 +64,7 @@ function ChatDrawer({ action, jobId, getToken, onClose }) {
   const [streaming, setStreaming] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [error, setError] = useState("");
+  const [injectionWarning, setInjectionWarning] = useState(null);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -94,6 +96,11 @@ function ChatDrawer({ action, jobId, getToken, onClose }) {
   useEffect(() => {
     if (!loadingHistory) inputRef.current?.focus();
   }, [loadingHistory]);
+
+  // Scan chat input for prompt injection / XSS patterns
+  useEffect(() => {
+    setInjectionWarning(detectChatInjection(input));
+  }, [input]);
 
   async function sendMessage(text, history) {
     const userMsg = { role: "user", content: text };
@@ -254,6 +261,29 @@ function ChatDrawer({ action, jobId, getToken, onClose }) {
           <div ref={bottomRef} />
         </div>
 
+        {/* Injection warning — shown above the input when a suspicious pattern is detected */}
+        {injectionWarning && (
+          <div
+            role="alert"
+            style={{
+              margin: "0 12px 0",
+              padding: "8px 12px",
+              borderRadius: 6,
+              background: "rgba(251,113,133,0.09)",
+              border: "1px solid rgba(251,113,133,0.35)",
+              fontSize: 11.5,
+              lineHeight: 1.45,
+            }}
+          >
+            <span style={{ fontWeight: 700, color: "#fecdd3", marginRight: 4 }}>
+              🚫 {injectionWarning.label}:
+            </span>
+            <span style={{ color: "rgba(254,205,211,0.8)" }}>
+              {injectionWarning.detail}
+            </span>
+          </div>
+        )}
+
         {/* Input */}
         <form
           onSubmit={handleSubmit}
@@ -281,6 +311,7 @@ function ChatDrawer({ action, jobId, getToken, onClose }) {
               fontSize: 13,
               marginTop: 0,
               minHeight: 44,
+              borderColor: injectionWarning ? "rgba(251,113,133,0.5)" : undefined,
             }}
           />
           <button
@@ -381,14 +412,26 @@ function SeverityBadge({ severity }) {
 
 // ── Remind Me modal ────────────────────────────────────────────────────────────
 
+/** Convert a date-only string (YYYY-MM-DD) or ISO string to datetime-local value. */
+function toDatetimeLocal(dateStr) {
+  if (!dateStr) return "";
+  // If it's already a full ISO string, use it; otherwise treat as date-only → default to 09:00
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours() || 9)}:${pad(d.getMinutes())}`;
+}
+
 function RemindMeModal({ action, jobId, getToken, userProfile, onClose, followUps, onFollowUpsChange }) {
   const existingForAction = followUps.filter((f) => f.action_id === action.id);
   const [email, setEmail] = useState(userProfile?.email || "");
   const [name, setName] = useState(userProfile?.name || "");
-  const [remindAt, setRemindAt] = useState("");
+  // Default reminder to the action's due date when one is set, so they stay in sync.
+  const [remindAt, setRemindAt] = useState(() => toDatetimeLocal(action.due_date || ""));
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const remindInputRef = useRef(null);
 
   async function handleCreate(e) {
     e.preventDefault();
@@ -487,8 +530,26 @@ function RemindMeModal({ action, jobId, getToken, userProfile, onClose, followUp
             </div>
           </div>
           <div>
-            <label style={{ fontSize: 11, color: "var(--muted)", display: "block", marginBottom: 3 }}>Remind at *</label>
-            <input className="input" type="datetime-local" required value={remindAt} onChange={(e) => setRemindAt(e.target.value)} style={{ fontSize: 12, marginTop: 0 }} />
+            <label style={{ fontSize: 11, color: "var(--muted)", display: "block", marginBottom: 3 }}>
+              Remind at *
+              {action.due_date && (
+                <span style={{ marginLeft: 6, fontWeight: 400, opacity: 0.7 }}>
+                  — defaults to due date, change if needed
+                </span>
+              )}
+            </label>
+            <input
+              ref={remindInputRef}
+              className="input"
+              type="datetime-local"
+              required
+              value={remindAt}
+              onChange={(e) => {
+                setRemindAt(e.target.value);
+                if (e.target.value) remindInputRef.current?.blur();
+              }}
+              style={{ fontSize: 12, marginTop: 0 }}
+            />
           </div>
           <div>
             <label style={{ fontSize: 11, color: "var(--muted)", display: "block", marginBottom: 3 }}>Message (optional)</label>
@@ -548,7 +609,15 @@ function ActionItem({
     }
   }
 
+  function handleDuePick(e) {
+    const val = e.target.value;
+    setDueDraft(val);
+    setEditingDue(false);
+    onDueDateChange(action.id, val || null);
+  }
+
   function handleDueBlur() {
+    // Fallback close: if the user tabs away without picking, still commit.
     setEditingDue(false);
     if (dueDraft !== (action.due_date || "")) {
       onDueDateChange(action.id, dueDraft || null);
@@ -670,7 +739,7 @@ function ActionItem({
               type="date"
               className="input"
               value={dueDraft ? dueDraft.slice(0, 10) : ""}
-              onChange={(e) => setDueDraft(e.target.value)}
+              onChange={handleDuePick}
               onBlur={handleDueBlur}
               autoFocus
               style={{ fontSize: 11, padding: "2px 6px", marginTop: 0, width: "auto" }}

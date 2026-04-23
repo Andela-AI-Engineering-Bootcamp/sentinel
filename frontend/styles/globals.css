@@ -432,6 +432,179 @@ label {
   font-size: 0.9rem;
 }
 
+
+.content-warn {
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  font-size: 0.88rem;
+  animation: content-warn-in 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* warn (yellow) variant — default */
+.content-warn--warn {
+  background: rgba(251, 191, 36, 0.09);
+  border: 1px solid rgba(251, 191, 36, 0.4);
+  color: var(--warn);
+}
+
+/* danger (red) variant */
+.content-warn--danger {
+  background: rgba(251, 113, 133, 0.09);
+  border: 1px solid rgba(251, 113, 133, 0.4);
+  color: #fecdd3;
+}
+
+@keyframes content-warn-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes content-warn-shake {
+  0%, 100% { transform: translateX(0); }
+  20%       { transform: translateX(-6px); }
+  40%       { transform: translateX(6px); }
+  60%       { transform: translateX(-4px); }
+  80%       { transform: translateX(4px); }
+}
+
+.content-warn--shake {
+  animation: content-warn-shake 0.5s ease;
+}
+
+/* Header row */
+.content-warn__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.content-warn__title-icon {
+  font-size: 1rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.content-warn__title {
+  flex: 1;
+  font-size: 0.9rem;
+}
+
+.content-warn--warn  .content-warn__title { color: var(--warn); }
+.content-warn--danger .content-warn__title { color: #fecdd3; }
+
+/* Issue list */
+.content-warn__issue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.content-warn__issue {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+}
+
+.content-warn__issue--danger {
+  background: rgba(251, 113, 133, 0.1);
+  border: 1px solid rgba(251, 113, 133, 0.25);
+}
+
+.content-warn__issue--warn {
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.25);
+}
+
+.content-warn__issue-icon {
+  font-size: 0.9rem;
+  line-height: 1.5;
+  flex-shrink: 0;
+}
+
+.content-warn__issue-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.content-warn__issue-label {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.content-warn__issue--danger .content-warn__issue-label { color: #fecdd3; }
+.content-warn__issue--warn  .content-warn__issue-label { color: var(--warn); }
+
+.content-warn__issue-detail {
+  font-size: 0.82rem;
+  opacity: 0.8;
+  line-height: 1.4;
+}
+
+/* Footer row */
+.content-warn__footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.content-warn__footer-note {
+  font-size: 0.78rem;
+  opacity: 0.65;
+}
+
+/* "Analyze anyway" button — adapts to severity */
+.btn-warn-proceed {
+  font-size: 0.8rem;
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.content-warn--warn .btn-warn-proceed {
+  background: rgba(251, 191, 36, 0.14);
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  color: var(--warn);
+}
+
+.content-warn--warn .btn-warn-proceed:hover {
+  background: rgba(251, 191, 36, 0.26);
+}
+
+.content-warn--danger .btn-warn-proceed {
+  background: rgba(251, 113, 133, 0.14);
+  border: 1px solid rgba(251, 113, 133, 0.45);
+  color: #fecdd3;
+}
+
+.content-warn--danger .btn-warn-proceed:hover {
+  background: rgba(251, 113, 133, 0.26);
+}
+
+.content-warn__dismiss {
+  font-size: 0.78rem;
+  padding: 3px 8px;
+  margin-left: auto;
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.content-warn__dismiss:hover {
+  opacity: 1;
+}
+
 .run-panel-head {
   display: flex;
   justify-content: space-between;
