@@ -17,7 +17,7 @@ load_dotenv(override=True)
 
 def get_db_name():
     """Get the target database name from env (defaults to Terraform default)."""
-    return os.getenv("DB_NAME", "sentinel")
+    return os.getenv("AURORA_DATABASE") or os.getenv("DB_NAME", "sentinel")
 
 
 def get_cluster_identifier():

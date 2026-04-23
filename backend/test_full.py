@@ -1,13 +1,12 @@
-"""Extended local integration test for multiple incidents."""
+"""Extended integration test for multiple incidents (Aurora Data API)."""
 
 from __future__ import annotations
 
-import os
-import tempfile
-
+from common.config import aurora_cluster_arn, aurora_database, aurora_secret_arn
 from common.models import IncidentInput
 from common.pipeline import create_incident_and_job, run_job
 from common.store import Database
+from database.src.db import load_sql_statements, migration_file
 
 
 SAMPLES = [
@@ -29,16 +28,23 @@ SAMPLES = [
 ]
 
 
-def main() -> None:
-    fd, path = tempfile.mkstemp(prefix="sentinel_backend_full_", suffix=".db")
-    os.close(fd)
-    os.environ["SENTINEL_DB_PATH"] = path
+def _ensure_env() -> None:
+    if not aurora_cluster_arn() or not aurora_secret_arn():
+        raise RuntimeError(
+            "Missing Aurora env. Set AURORA_CLUSTER_ARN and AURORA_SECRET_ARN before running tests."
+        )
 
-    db = Database(path)
+
+def main() -> None:
+    _ensure_env()
+
+    db = Database(aurora_database())
     try:
+        db.execute_script(load_sql_statements(migration_file()))
+
         for sample in SAMPLES:
-            _, job_id = create_incident_and_job(sample, db)
-            result = run_job(job_id, db)
+            _, job_id = create_incident_and_job(sample, db, clerk_user_id="test_full_user")
+            result = run_job(job_id, db, clerk_user_id="test_full_user")
             assert result.status == "completed", result
             assert result.analysis is not None
 

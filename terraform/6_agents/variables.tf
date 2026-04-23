@@ -16,6 +16,11 @@ variable "aurora_secret_arn" {
   type = string
 }
 
+variable "aurora_database" {
+  type    = string
+  default = "sentinel"
+}
+
 variable "lambda_zip_paths" {
   type = map(string)
   default = {

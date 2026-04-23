@@ -101,6 +101,35 @@ resource "aws_iam_role_policy_attachment" "api_lambda_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+resource "aws_iam_role_policy" "api_lambda_aurora_data_api" {
+  name = "sentinel-api-lambda-aurora-data-api"
+  role = aws_iam_role.api_lambda_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "rds-data:ExecuteStatement",
+          "rds-data:BatchExecuteStatement",
+          "rds-data:BeginTransaction",
+          "rds-data:CommitTransaction",
+          "rds-data:RollbackTransaction",
+        ]
+        Resource = data.terraform_remote_state.database.outputs.aurora_cluster_arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue",
+        ]
+        Resource = data.terraform_remote_state.database.outputs.aurora_secret_arn
+      },
+    ]
+  })
+}
+
 resource "aws_lambda_function" "api" {
   function_name = var.api_lambda_name
   role          = aws_iam_role.api_lambda_role.arn
@@ -127,9 +156,8 @@ resource "aws_lambda_function" "api" {
       CLERK_JWKS_URL = var.clerk_jwks_url
       CLERK_ISSUER   = var.clerk_issuer
 
-      # Runtime configuration for the current SQLite-backed API implementation
-      SENTINEL_DB_PATH = "/tmp/sentinel.db"
-      AUTH_DISABLED    = "false"
+      # Runtime authentication setting
+      AUTH_DISABLED = "false"
 
       # CORS configuration consumed by the FastAPI app
       ALLOWED_ORIGINS = "http://localhost:3000,https://${aws_cloudfront_distribution.frontend.domain_name}"

@@ -1,4 +1,5 @@
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const RAW_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const BASE_URL = RAW_BASE_URL.replace(/\/+$/, "");
 
 async function request(path, options = {}) {
   const token = options.token;

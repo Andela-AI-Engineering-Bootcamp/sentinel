@@ -1,20 +1,33 @@
-"""API smoke test for Sentinel."""
+"""API smoke test for Sentinel (Aurora Data API)."""
 
 from __future__ import annotations
 
 import os
-import tempfile
 
 from fastapi.testclient import TestClient
 
 from api.main import app
+from common.config import aurora_cluster_arn, aurora_database, aurora_secret_arn
+from common.store import Database
+from database.src.db import load_sql_statements, migration_file
+
+
+def _ensure_env() -> None:
+    if not aurora_cluster_arn() or not aurora_secret_arn():
+        raise RuntimeError(
+            "Missing Aurora env. Set AURORA_CLUSTER_ARN and AURORA_SECRET_ARN before running tests."
+        )
 
 
 def main() -> None:
-    fd, path = tempfile.mkstemp(prefix="sentinel_api_test_", suffix=".db")
-    os.close(fd)
-    os.environ["SENTINEL_DB_PATH"] = path
+    _ensure_env()
     os.environ["AUTH_DISABLED"] = "true"
+
+    db = Database(aurora_database())
+    try:
+        db.execute_script(load_sql_statements(migration_file()))
+    finally:
+        db.close()
 
     client = TestClient(app)
 
@@ -39,9 +52,9 @@ def main() -> None:
     assert payload["status"] == "completed", payload
     assert payload["analysis"]["summary"]["severity"] in {"high", "critical"}
 
-    incidents = client.get("/api/incidents")
-    assert incidents.status_code == 200, incidents.text
-    assert len(incidents.json()) >= 1
+    jobs = client.get("/api/jobs")
+    assert jobs.status_code == 200, jobs.text
+    assert len(jobs.json()) >= 1
 
     print("API smoke test passed")
 

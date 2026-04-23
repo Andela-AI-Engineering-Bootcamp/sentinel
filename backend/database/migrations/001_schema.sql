@@ -1,2 +1,107 @@
--- Sentinel MVP schema placeholder
--- TODO: define users, incidents, jobs, and agent_outputs tables.
+-- Sentinel Aurora schema (PostgreSQL / Aurora Data API)
+
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  clerk_user_id TEXT NOT NULL UNIQUE,
+  email TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS incidents (
+  id TEXT PRIMARY KEY,
+  clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id),
+  title TEXT,
+  source TEXT NOT NULL,
+  raw_text TEXT NOT NULL,
+  sanitized_text TEXT,
+  guardrail_json TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  assigned_to TEXT,
+  resolved_at TEXT,
+  resolution_notes TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS jobs (
+  id TEXT PRIMARY KEY,
+  incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+  clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id),
+  status TEXT NOT NULL,
+  error_message TEXT,
+  analysis_json TEXT,
+  current_stage TEXT,
+  pipeline_events TEXT NOT NULL DEFAULT '[]',
+  similar_incidents_json TEXT,
+  clarification_answers_json TEXT,
+  pir_json TEXT,
+  created_at TEXT NOT NULL,
+  completed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS remediation_actions (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  action_text TEXT NOT NULL,
+  action_type TEXT NOT NULL DEFAULT 'recommended',
+  status TEXT NOT NULL DEFAULT 'pending',
+  assigned_to TEXT,
+  completed_at TEXT,
+  notes TEXT,
+  severity TEXT NOT NULL DEFAULT 'medium',
+  due_date TEXT,
+  parent_action_id TEXT,
+  eval_response TEXT,
+  engineer_submission TEXT,
+  source_anchor_action_id TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS integrations (
+  id TEXT PRIMARY KEY,
+  clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  config_json TEXT NOT NULL DEFAULT '{}',
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  action_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS follow_ups (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  action_id TEXT,
+  clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id) ON DELETE CASCADE,
+  user_email TEXT NOT NULL,
+  user_name TEXT,
+  message TEXT,
+  remind_at TEXT NOT NULL,
+  sent_at TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_incidents_clerk_created
+  ON incidents(clerk_user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_incident_created
+  ON jobs(incident_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_clerk_created
+  ON jobs(clerk_user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_remediation_job_created
+  ON remediation_actions(job_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_followups_due
+  ON follow_ups(remind_at, sent_at);
+
+CREATE INDEX IF NOT EXISTS idx_chat_job_action_created
+  ON chat_messages(job_id, action_id, created_at);

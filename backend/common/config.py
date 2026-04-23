@@ -5,13 +5,46 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - optional in some runtime contexts
+    load_dotenv = None
 
-BASE_DIR = Path(__file__).resolve().parents[1]
-DEFAULT_DB_PATH = str(BASE_DIR / "sentinel.db")
+
+if load_dotenv is not None:
+    # Load repo-level .env for local scripts; harmless in AWS Lambda if absent.
+    _repo_env = Path(__file__).resolve().parents[2] / ".env"
+    load_dotenv(_repo_env, override=False)
 
 
 def get_db_path() -> str:
-    return os.getenv("SENTINEL_DB_PATH", DEFAULT_DB_PATH)
+    """Backward-compatible alias: now returns Aurora database name."""
+    return aurora_database()
+
+
+def aurora_cluster_arn() -> str:
+    return os.getenv("AURORA_CLUSTER_ARN", "").strip()
+
+
+def aurora_secret_arn() -> str:
+    return os.getenv("AURORA_SECRET_ARN", "").strip()
+
+
+def aurora_database() -> str:
+    return (
+        os.getenv("AURORA_DATABASE", "").strip()
+        or os.getenv("DB_NAME", "").strip()
+        or "sentinel"
+    )
+
+
+def aurora_region() -> str:
+    return (
+        os.getenv("AURORA_REGION", "").strip()
+        or os.getenv("DEFAULT_AWS_REGION", "").strip()
+        or os.getenv("AWS_REGION", "").strip()
+        or "eu-west-1"
+    )
 
 
 def use_bedrock() -> bool:
@@ -35,7 +68,7 @@ def model_root_cause() -> str:
 
 
 def model_remediation() -> str:
-    return os.getenv("BEDROCK_MODEL_REMEDIATION", "ueu.amazon.nova-pro-v1:0")
+    return os.getenv("BEDROCK_MODEL_REMEDIATION", "eu.amazon.nova-pro-v1:0")
 
 
 def use_openrouter() -> bool:

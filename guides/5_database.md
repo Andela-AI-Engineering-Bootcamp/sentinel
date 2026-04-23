@@ -15,6 +15,7 @@ terraform apply
 Add to `.env`:
 - `AURORA_CLUSTER_ARN`
 - `AURORA_SECRET_ARN`
+- `AURORA_DATABASE`
 
 ## Initialize Local DB Utilities
 ```bash

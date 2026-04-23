@@ -1,22 +1,28 @@
-"""End-to-end backend smoke test with guardrails."""
+"""End-to-end backend smoke test with guardrails (Aurora Data API)."""
 
 from __future__ import annotations
 
-import os
-import tempfile
-
+from common.config import aurora_cluster_arn, aurora_database, aurora_secret_arn
 from common.models import IncidentInput
 from common.pipeline import create_incident_and_job, run_job
 from common.store import Database
+from database.src.db import load_sql_statements, migration_file
+
+
+def _ensure_env() -> None:
+    if not aurora_cluster_arn() or not aurora_secret_arn():
+        raise RuntimeError(
+            "Missing Aurora env. Set AURORA_CLUSTER_ARN and AURORA_SECRET_ARN before running tests."
+        )
 
 
 def main() -> None:
-    fd, path = tempfile.mkstemp(prefix="sentinel_backend_test_", suffix=".db")
-    os.close(fd)
-    os.environ["SENTINEL_DB_PATH"] = path
+    _ensure_env()
 
-    db = Database(path)
+    db = Database(aurora_database())
     try:
+        db.execute_script(load_sql_statements(migration_file()))
+
         payload = IncidentInput(
             title="Checkout Errors",
             source="manual",
@@ -26,8 +32,8 @@ def main() -> None:
                 "2026-04-20T18:22:04Z ERROR request timeout after 30s on /checkout"
             ),
         )
-        incident_id, job_id = create_incident_and_job(payload, db)
-        result = run_job(job_id, db)
+        incident_id, job_id = create_incident_and_job(payload, db, clerk_user_id="test_simple_user")
+        result = run_job(job_id, db, clerk_user_id="test_simple_user")
 
         assert result.status == "completed", result
         assert result.analysis is not None

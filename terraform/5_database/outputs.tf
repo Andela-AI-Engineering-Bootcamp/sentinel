@@ -42,12 +42,13 @@ output "setup_instructions" {
     Add the following to your .env file:
     AURORA_CLUSTER_ARN=${aws_rds_cluster.aurora.arn}
     AURORA_SECRET_ARN=${aws_secretsmanager_secret.db_credentials.arn}
+    AURORA_DATABASE=${aws_rds_cluster.aurora.database_name}
     
     Test the Data API connection:
     aws rds-data execute-statement \
       --resource-arn ${aws_rds_cluster.aurora.arn} \
       --secret-arn ${aws_secretsmanager_secret.db_credentials.arn} \
-      --database alex \
+      --database ${aws_rds_cluster.aurora.database_name} \
       --sql "SELECT version()"
     
     To set up the database schema:

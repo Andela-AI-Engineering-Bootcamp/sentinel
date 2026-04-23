@@ -1,153 +1,192 @@
-"""SQLite persistence layer for Sentinel MVP local and lambda testing."""
+"""Aurora Data API persistence layer for Sentinel."""
 
 from __future__ import annotations
 
 import json
-import sqlite3
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+import boto3
+
+from common.config import aurora_cluster_arn, aurora_database, aurora_region, aurora_secret_arn
 from common.models import IncidentAnalysis
 
 
 class Database:
-    """Lightweight database wrapper for incidents and analysis jobs."""
+    """Lightweight Aurora Data API wrapper for incidents and analysis jobs."""
 
-    def __init__(self, db_path: str) -> None:
-        self.db_path = db_path
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._create_tables()
+    def __init__(self, database_name: str | None = None) -> None:
+        self.cluster_arn = aurora_cluster_arn()
+        self.secret_arn = aurora_secret_arn()
+        self.database = (database_name or aurora_database()).strip() or "sentinel"
+        self.region = aurora_region()
 
-    def _create_tables(self) -> None:
-        with self._conn:
-            self._conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS incidents (
-                  id TEXT PRIMARY KEY,
-                  clerk_user_id TEXT NOT NULL DEFAULT 'anonymous',
-                  title TEXT,
-                  source TEXT NOT NULL,
-                  raw_text TEXT NOT NULL,
-                  sanitized_text TEXT,
-                  guardrail_json TEXT,
-                  created_at TEXT NOT NULL
-                )
-                """
+        if not self.cluster_arn or not self.secret_arn:
+            raise ValueError(
+                "Aurora not configured. Set AURORA_CLUSTER_ARN and AURORA_SECRET_ARN."
             )
-            self._conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS jobs (
-                  id TEXT PRIMARY KEY,
-                  incident_id TEXT NOT NULL,
-                  clerk_user_id TEXT NOT NULL DEFAULT 'anonymous',
-                  status TEXT NOT NULL,
-                  error_message TEXT,
-                  analysis_json TEXT,
-                  created_at TEXT NOT NULL,
-                  completed_at TEXT,
-                  FOREIGN KEY (incident_id) REFERENCES incidents(id)
-                )
-                """
-            )
-            self._ensure_column("incidents", "clerk_user_id", "TEXT NOT NULL DEFAULT 'anonymous'")
-            self._ensure_column("jobs", "clerk_user_id", "TEXT NOT NULL DEFAULT 'anonymous'")
-            self._ensure_column("jobs", "current_stage", "TEXT")
-            self._ensure_column("jobs", "pipeline_events", "TEXT NOT NULL DEFAULT '[]'")
-            self._ensure_column("jobs", "similar_incidents_json", "TEXT")
-            self._ensure_column("incidents", "status", "TEXT NOT NULL DEFAULT 'open'")
-            self._ensure_column("incidents", "assigned_to", "TEXT")
-            self._ensure_column("incidents", "resolved_at", "TEXT")
-            self._ensure_column("incidents", "resolution_notes", "TEXT")
-            self._ensure_column("jobs", "clarification_answers_json", "TEXT")
-            self._create_remediation_actions_table()
-            self._create_integrations_table()
-            self._create_chat_messages_table()
-            self._create_follow_ups_table()
-            self._ensure_column("remediation_actions", "severity", "TEXT NOT NULL DEFAULT 'medium'")
-            self._ensure_column("remediation_actions", "due_date", "TEXT")
-            self._ensure_column("jobs", "pir_json", "TEXT")
-            self._ensure_column("incidents", "resolution_notes", "TEXT")
-            self._ensure_column("remediation_actions", "parent_action_id", "TEXT")
-            self._ensure_column("remediation_actions", "eval_response", "TEXT")
-            self._ensure_column("remediation_actions", "engineer_submission", "TEXT")
-            self._ensure_column("remediation_actions", "source_anchor_action_id", "TEXT")
 
-    def _create_remediation_actions_table(self) -> None:
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS remediation_actions (
-              id TEXT PRIMARY KEY,
-              job_id TEXT NOT NULL,
-              action_text TEXT NOT NULL,
-              action_type TEXT NOT NULL DEFAULT 'recommended',
-              status TEXT NOT NULL DEFAULT 'pending',
-              assigned_to TEXT,
-              completed_at TEXT,
-              notes TEXT,
-              created_at TEXT NOT NULL,
-              FOREIGN KEY (job_id) REFERENCES jobs(id)
-            )
-            """
+        self._client = boto3.client("rds-data", region_name=self.region)
+
+    @staticmethod
+    def _now_iso() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    @staticmethod
+    def _encode_param(value: Any) -> dict[str, Any]:
+        if value is None:
+            return {"isNull": True}
+        if isinstance(value, bool):
+            return {"booleanValue": value}
+        if isinstance(value, int):
+            return {"longValue": value}
+        if isinstance(value, float):
+            return {"doubleValue": value}
+        return {"stringValue": str(value)}
+
+    @classmethod
+    def _build_params(cls, params: dict[str, Any] | None) -> list[dict[str, Any]]:
+        if not params:
+            return []
+        out: list[dict[str, Any]] = []
+        for key, value in params.items():
+            out.append({"name": key, "value": cls._encode_param(value)})
+        return out
+
+    @staticmethod
+    def _decode_field(field: dict[str, Any]) -> Any:
+        if field.get("isNull"):
+            return None
+        if "stringValue" in field:
+            return field["stringValue"]
+        if "longValue" in field:
+            return field["longValue"]
+        if "doubleValue" in field:
+            return field["doubleValue"]
+        if "booleanValue" in field:
+            return field["booleanValue"]
+        if "arrayValue" in field:
+            array_values = field["arrayValue"].get("arrayValues", [])
+            return [Database._decode_field(item) for item in array_values]
+        if "blobValue" in field:
+            return field["blobValue"]
+        return None
+
+    def _run_statement(
+        self,
+        sql: str,
+        params: dict[str, Any] | None = None,
+        *,
+        include_metadata: bool = False,
+        transaction_id: str | None = None,
+    ) -> dict[str, Any]:
+        request: dict[str, Any] = {
+            "resourceArn": self.cluster_arn,
+            "secretArn": self.secret_arn,
+            "database": self.database,
+            "sql": sql,
+            "parameters": self._build_params(params),
+            "includeResultMetadata": include_metadata,
+        }
+        if transaction_id:
+            request["transactionId"] = transaction_id
+        return self._client.execute_statement(**request)
+
+    def _query(
+        self,
+        sql: str,
+        params: dict[str, Any] | None = None,
+        *,
+        transaction_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        response = self._run_statement(
+            sql,
+            params,
+            include_metadata=True,
+            transaction_id=transaction_id,
         )
+        metadata = response.get("columnMetadata") or []
+        if not metadata:
+            return []
 
-    def _create_follow_ups_table(self) -> None:
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS follow_ups (
-              id TEXT PRIMARY KEY,
-              job_id TEXT NOT NULL,
-              action_id TEXT,
-              clerk_user_id TEXT NOT NULL,
-              user_email TEXT NOT NULL,
-              user_name TEXT,
-              message TEXT,
-              remind_at TEXT NOT NULL,
-              sent_at TEXT,
-              created_at TEXT NOT NULL,
-              FOREIGN KEY (job_id) REFERENCES jobs(id)
+        columns = [(c.get("label") or c.get("name") or "").strip() for c in metadata]
+        rows: list[dict[str, Any]] = []
+        for rec in response.get("records") or []:
+            row: dict[str, Any] = {}
+            for idx, field in enumerate(rec):
+                key = columns[idx] if idx < len(columns) else f"col_{idx}"
+                row[key] = self._decode_field(field)
+            rows.append(row)
+        return rows
+
+    def _query_one(
+        self,
+        sql: str,
+        params: dict[str, Any] | None = None,
+        *,
+        transaction_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        rows = self._query(sql, params, transaction_id=transaction_id)
+        return rows[0] if rows else None
+
+    def _execute(
+        self,
+        sql: str,
+        params: dict[str, Any] | None = None,
+        *,
+        transaction_id: str | None = None,
+    ) -> int:
+        response = self._run_statement(sql, params, transaction_id=transaction_id)
+        return int(response.get("numberOfRecordsUpdated") or 0)
+
+    def execute_script(self, statements: list[str]) -> None:
+        if not statements:
+            return
+        tx = self._client.begin_transaction(
+            resourceArn=self.cluster_arn,
+            secretArn=self.secret_arn,
+            database=self.database,
+        )["transactionId"]
+        try:
+            for statement in statements:
+                sql = statement.strip()
+                if not sql:
+                    continue
+                self._execute(sql, transaction_id=tx)
+            self._client.commit_transaction(
+                resourceArn=self.cluster_arn,
+                secretArn=self.secret_arn,
+                transactionId=tx,
             )
-            """
-        )
-
-    def _create_chat_messages_table(self) -> None:
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS chat_messages (
-              id TEXT PRIMARY KEY,
-              job_id TEXT NOT NULL,
-              action_id TEXT NOT NULL,
-              role TEXT NOT NULL,
-              content TEXT NOT NULL,
-              created_at TEXT NOT NULL,
-              FOREIGN KEY (job_id) REFERENCES jobs(id)
+        except Exception:
+            self._client.rollback_transaction(
+                resourceArn=self.cluster_arn,
+                secretArn=self.secret_arn,
+                transactionId=tx,
             )
-            """
-        )
+            raise
 
-    def _create_integrations_table(self) -> None:
-        self._conn.execute(
+    def _ensure_user(self, clerk_user_id: str, email: str | None = None) -> None:
+        uid = clerk_user_id or "anonymous"
+        now = self._now_iso()
+        self._execute(
             """
-            CREATE TABLE IF NOT EXISTS integrations (
-              id TEXT PRIMARY KEY,
-              clerk_user_id TEXT NOT NULL DEFAULT 'anonymous',
-              type TEXT NOT NULL,
-              config_json TEXT NOT NULL DEFAULT '{}',
-              enabled INTEGER NOT NULL DEFAULT 1,
-              created_at TEXT NOT NULL
-            )
-            """
+            INSERT INTO users (id, clerk_user_id, email, created_at, updated_at)
+            VALUES (:id, :clerk_user_id, :email, :created_at, :updated_at)
+            ON CONFLICT (clerk_user_id)
+            DO UPDATE
+              SET email = COALESCE(EXCLUDED.email, users.email),
+                  updated_at = EXCLUDED.updated_at
+            """,
+            {
+                "id": str(uuid.uuid4()),
+                "clerk_user_id": uid,
+                "email": email,
+                "created_at": now,
+                "updated_at": now,
+            },
         )
-
-    def _ensure_column(self, table: str, column: str, definition: str) -> None:
-        cols = [row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})").fetchall()]
-        if column not in cols:
-            try:
-                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
-            except sqlite3.OperationalError as e:
-                if "duplicate column name" not in str(e).lower():
-                    raise
 
     def create_incident(
         self,
@@ -159,194 +198,249 @@ class Database:
         guardrail_json: dict | None = None,
     ) -> str:
         incident_id = str(uuid.uuid4())
-        with self._conn:
-            self._conn.execute(
-                """
-                INSERT INTO incidents (id, clerk_user_id, title, source, raw_text, sanitized_text, guardrail_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    incident_id,
-                    clerk_user_id,
-                    title,
-                    source,
-                    text,
-                    sanitized_text,
-                    json.dumps(guardrail_json or {}),
-                    datetime.now(timezone.utc).isoformat(),
-                ),
+        uid = clerk_user_id or "anonymous"
+        self._ensure_user(uid)
+        self._execute(
+            """
+            INSERT INTO incidents (
+              id, clerk_user_id, title, source, raw_text, sanitized_text,
+              guardrail_json, created_at
             )
+            VALUES (
+              :id, :clerk_user_id, :title, :source, :raw_text, :sanitized_text,
+              :guardrail_json, :created_at
+            )
+            """,
+            {
+                "id": incident_id,
+                "clerk_user_id": uid,
+                "title": title,
+                "source": source,
+                "raw_text": text,
+                "sanitized_text": sanitized_text,
+                "guardrail_json": json.dumps(guardrail_json or {}),
+                "created_at": self._now_iso(),
+            },
+        )
         return incident_id
 
-    def update_incident_sanitization(self, incident_id: str, sanitized_text: str, guardrail_json: dict) -> None:
-        with self._conn:
-            self._conn.execute(
-                "UPDATE incidents SET sanitized_text=?, guardrail_json=? WHERE id=?",
-                (sanitized_text, json.dumps(guardrail_json), incident_id),
-            )
+    def update_incident_sanitization(
+        self, incident_id: str, sanitized_text: str, guardrail_json: dict
+    ) -> None:
+        self._execute(
+            """
+            UPDATE incidents
+            SET sanitized_text=:sanitized_text, guardrail_json=:guardrail_json
+            WHERE id=:incident_id
+            """,
+            {
+                "incident_id": incident_id,
+                "sanitized_text": sanitized_text,
+                "guardrail_json": json.dumps(guardrail_json),
+            },
+        )
 
     def create_job(self, incident_id: str, clerk_user_id: str, status: str = "pending") -> str:
         job_id = str(uuid.uuid4())
-        with self._conn:
-            self._conn.execute(
-                """
-                INSERT INTO jobs (id, incident_id, clerk_user_id, status, created_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (job_id, incident_id, clerk_user_id, status, datetime.now(timezone.utc).isoformat()),
-            )
+        uid = clerk_user_id or "anonymous"
+        self._ensure_user(uid)
+        self._execute(
+            """
+            INSERT INTO jobs (id, incident_id, clerk_user_id, status, created_at)
+            VALUES (:id, :incident_id, :clerk_user_id, :status, :created_at)
+            """,
+            {
+                "id": job_id,
+                "incident_id": incident_id,
+                "clerk_user_id": uid,
+                "status": status,
+                "created_at": self._now_iso(),
+            },
+        )
         return job_id
 
-    def update_job_status(self, job_id: str, status: str, error_message: str | None = None) -> None:
-        with self._conn:
-            self._conn.execute(
-                "UPDATE jobs SET status=?, error_message=? WHERE id=?",
-                (status, error_message, job_id),
-            )
+    def update_job_status(
+        self, job_id: str, status: str, error_message: str | None = None
+    ) -> None:
+        self._execute(
+            """
+            UPDATE jobs
+            SET status=:status, error_message=:error_message
+            WHERE id=:job_id
+            """,
+            {"job_id": job_id, "status": status, "error_message": error_message},
+        )
 
     def set_job_stage(self, job_id: str, stage: str, detail: str | None = None) -> None:
         payload = detail or ""
-        with self._conn:
-            self._conn.execute(
-                "UPDATE jobs SET current_stage=? WHERE id=?",
-                (stage, job_id),
-            )
-            row = self._conn.execute(
-                "SELECT pipeline_events FROM jobs WHERE id=?",
-                (job_id,),
-            ).fetchone()
-            events: list[dict] = []
-            if row and row["pipeline_events"]:
-                try:
-                    parsed = json.loads(row["pipeline_events"])
-                    if isinstance(parsed, list):
-                        events = parsed
-                except json.JSONDecodeError:
-                    events = []
-            events.append(
-                {
-                    "stage": stage,
-                    "detail": payload,
-                    "at": datetime.now(timezone.utc).isoformat(),
-                }
-            )
-            self._conn.execute(
-                "UPDATE jobs SET pipeline_events=? WHERE id=?",
-                (json.dumps(events), job_id),
-            )
+        row = self._query_one(
+            "SELECT pipeline_events FROM jobs WHERE id=:job_id", {"job_id": job_id}
+        )
+
+        events: list[dict[str, Any]] = []
+        raw = (row or {}).get("pipeline_events")
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    events = parsed
+            except json.JSONDecodeError:
+                events = []
+
+        events.append(
+            {
+                "stage": stage,
+                "detail": payload,
+                "at": self._now_iso(),
+            }
+        )
+
+        self._execute(
+            """
+            UPDATE jobs
+            SET current_stage=:stage, pipeline_events=:pipeline_events
+            WHERE id=:job_id
+            """,
+            {
+                "job_id": job_id,
+                "stage": stage,
+                "pipeline_events": json.dumps(events),
+            },
+        )
 
     def set_similar_incidents(self, job_id: str, similar: list[dict]) -> None:
-        with self._conn:
-            self._conn.execute(
-                "UPDATE jobs SET similar_incidents_json=? WHERE id=?",
-                (json.dumps(similar), job_id),
-            )
+        self._execute(
+            "UPDATE jobs SET similar_incidents_json=:similar WHERE id=:job_id",
+            {"job_id": job_id, "similar": json.dumps(similar)},
+        )
 
     def save_analysis(self, job_id: str, analysis: IncidentAnalysis) -> None:
-        with self._conn:
-            self._conn.execute(
-                """
-                UPDATE jobs
-                SET status='completed', analysis_json=?, completed_at=?
-                WHERE id=?
-                """,
-                (
-                    analysis.model_dump_json(),
-                    datetime.now(timezone.utc).isoformat(),
-                    job_id,
-                ),
+        self._execute(
+            """
+            UPDATE jobs
+            SET status='completed', analysis_json=:analysis_json, completed_at=:completed_at
+            WHERE id=:job_id
+            """,
+            {
+                "job_id": job_id,
+                "analysis_json": analysis.model_dump_json(),
+                "completed_at": self._now_iso(),
+            },
+        )
+
+    def get_incident(
+        self, incident_id: str, clerk_user_id: str | None = None
+    ) -> dict | None:
+        if clerk_user_id:
+            return self._query_one(
+                "SELECT * FROM incidents WHERE id=:id AND clerk_user_id=:clerk_user_id",
+                {"id": incident_id, "clerk_user_id": clerk_user_id},
             )
+        return self._query_one(
+            "SELECT * FROM incidents WHERE id=:id", {"id": incident_id}
+        )
 
-    def get_incident(self, incident_id: str, clerk_user_id: str | None = None) -> dict | None:
+    def list_incidents(
+        self, limit: int = 50, clerk_user_id: str | None = None
+    ) -> list[dict]:
         if clerk_user_id:
-            row = self._conn.execute(
-                "SELECT * FROM incidents WHERE id=? AND clerk_user_id=?",
-                (incident_id, clerk_user_id),
-            ).fetchone()
-        else:
-            row = self._conn.execute("SELECT * FROM incidents WHERE id=?", (incident_id,)).fetchone()
-        return dict(row) if row else None
-
-    def list_incidents(self, limit: int = 50, clerk_user_id: str | None = None) -> list[dict]:
-        if clerk_user_id:
-            rows = self._conn.execute(
-                "SELECT * FROM incidents WHERE clerk_user_id=? ORDER BY created_at DESC LIMIT ?",
-                (clerk_user_id, limit),
-            ).fetchall()
-        else:
-            rows = self._conn.execute(
-                "SELECT * FROM incidents ORDER BY created_at DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
-        return [dict(r) for r in rows]
-
-    def list_jobs(self, limit: int = 25, clerk_user_id: str | None = None) -> list[dict[str, Any]]:
-        """Recent analysis jobs with incident title for dashboard listing."""
-
-        if clerk_user_id:
-            rows = self._conn.execute(
+            return self._query(
                 """
-                SELECT j.id AS job_id, j.incident_id, j.status, j.created_at, j.completed_at, i.title, i.source
+                SELECT * FROM incidents
+                WHERE clerk_user_id=:clerk_user_id
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """,
+                {"clerk_user_id": clerk_user_id, "limit": limit},
+            )
+        return self._query(
+            "SELECT * FROM incidents ORDER BY created_at DESC LIMIT :limit",
+            {"limit": limit},
+        )
+
+    def list_jobs(
+        self, limit: int = 25, clerk_user_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        if clerk_user_id:
+            return self._query(
+                """
+                SELECT
+                  j.id AS job_id,
+                  j.incident_id,
+                  j.status,
+                  j.analysis_json,
+                  j.created_at,
+                  j.completed_at,
+                  i.title,
+                  i.source
                 FROM jobs j
                 JOIN incidents i ON i.id = j.incident_id
-                WHERE j.clerk_user_id = ?
+                WHERE j.clerk_user_id = :clerk_user_id
                 ORDER BY j.created_at DESC
-                LIMIT ?
+                LIMIT :limit
                 """,
-                (clerk_user_id, limit),
-            ).fetchall()
-        else:
-            rows = self._conn.execute(
-                """
-                SELECT j.id AS job_id, j.incident_id, j.status, j.created_at, j.completed_at, i.title, i.source
-                FROM jobs j
-                JOIN incidents i ON i.id = j.incident_id
-                ORDER BY j.created_at DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
-        return [dict(r) for r in rows]
+                {"clerk_user_id": clerk_user_id, "limit": limit},
+            )
+        return self._query(
+            """
+            SELECT
+              j.id AS job_id,
+              j.incident_id,
+              j.status,
+              j.analysis_json,
+              j.created_at,
+              j.completed_at,
+              i.title,
+              i.source
+            FROM jobs j
+            JOIN incidents i ON i.id = j.incident_id
+            ORDER BY j.created_at DESC
+            LIMIT :limit
+            """,
+            {"limit": limit},
+        )
 
     def get_job(self, job_id: str, clerk_user_id: str | None = None) -> dict | None:
         if clerk_user_id:
-            row = self._conn.execute(
-                "SELECT * FROM jobs WHERE id=? AND clerk_user_id=?",
-                (job_id, clerk_user_id),
-            ).fetchone()
-        else:
-            row = self._conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
-        return dict(row) if row else None
+            return self._query_one(
+                "SELECT * FROM jobs WHERE id=:id AND clerk_user_id=:clerk_user_id",
+                {"id": job_id, "clerk_user_id": clerk_user_id},
+            )
+        return self._query_one("SELECT * FROM jobs WHERE id=:id", {"id": job_id})
 
-    def get_job_with_incident(self, job_id: str, clerk_user_id: str | None = None) -> dict | None:
+    def get_job_with_incident(
+        self, job_id: str, clerk_user_id: str | None = None
+    ) -> dict | None:
         if clerk_user_id:
-            row = self._conn.execute(
+            return self._query_one(
                 """
                 SELECT j.*, i.raw_text, i.title, i.source, i.sanitized_text, i.guardrail_json
                 FROM jobs j
                 JOIN incidents i ON i.id = j.incident_id
-                WHERE j.id = ? AND j.clerk_user_id = ?
+                WHERE j.id = :job_id AND j.clerk_user_id = :clerk_user_id
                 """,
-                (job_id, clerk_user_id),
-            ).fetchone()
-        else:
-            row = self._conn.execute(
-                """
-                SELECT j.*, i.raw_text, i.title, i.source, i.sanitized_text, i.guardrail_json
-                FROM jobs j
-                JOIN incidents i ON i.id = j.incident_id
-                WHERE j.id = ?
-                """,
-                (job_id,),
-            ).fetchone()
-        return dict(row) if row else None
+                {"job_id": job_id, "clerk_user_id": clerk_user_id},
+            )
+        return self._query_one(
+            """
+            SELECT j.*, i.raw_text, i.title, i.source, i.sanitized_text, i.guardrail_json
+            FROM jobs j
+            JOIN incidents i ON i.id = j.incident_id
+            WHERE j.id = :job_id
+            """,
+            {"job_id": job_id},
+        )
 
     def get_latest_job_for_incident(self, incident_id: str) -> dict | None:
-        row = self._conn.execute(
-            "SELECT * FROM jobs WHERE incident_id=? ORDER BY created_at DESC LIMIT 1",
-            (incident_id,),
-        ).fetchone()
-        return dict(row) if row else None
+        return self._query_one(
+            """
+            SELECT * FROM jobs
+            WHERE incident_id=:incident_id
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            {"incident_id": incident_id},
+        )
 
     def update_incident_status(
         self,
@@ -354,19 +448,35 @@ class Database:
         status: str,
         clerk_user_id: str | None = None,
     ) -> bool:
-        resolved_at = datetime.now(timezone.utc).isoformat() if status == "resolved" else None
-        with self._conn:
-            if clerk_user_id:
-                cur = self._conn.execute(
-                    "UPDATE incidents SET status=?, resolved_at=COALESCE(?, resolved_at) WHERE id=? AND clerk_user_id=?",
-                    (status, resolved_at, incident_id, clerk_user_id),
-                )
-            else:
-                cur = self._conn.execute(
-                    "UPDATE incidents SET status=?, resolved_at=COALESCE(?, resolved_at) WHERE id=?",
-                    (status, resolved_at, incident_id),
-                )
-        return cur.rowcount > 0
+        resolved_at = self._now_iso() if status == "resolved" else None
+        if clerk_user_id:
+            updated = self._execute(
+                """
+                UPDATE incidents
+                SET status=:status, resolved_at=COALESCE(:resolved_at, resolved_at)
+                WHERE id=:incident_id AND clerk_user_id=:clerk_user_id
+                """,
+                {
+                    "status": status,
+                    "resolved_at": resolved_at,
+                    "incident_id": incident_id,
+                    "clerk_user_id": clerk_user_id,
+                },
+            )
+        else:
+            updated = self._execute(
+                """
+                UPDATE incidents
+                SET status=:status, resolved_at=COALESCE(:resolved_at, resolved_at)
+                WHERE id=:incident_id
+                """,
+                {
+                    "status": status,
+                    "resolved_at": resolved_at,
+                    "incident_id": incident_id,
+                },
+            )
+        return updated > 0
 
     def update_incident_assign(
         self,
@@ -374,18 +484,25 @@ class Database:
         assigned_to: str | None,
         clerk_user_id: str | None = None,
     ) -> bool:
-        with self._conn:
-            if clerk_user_id:
-                cur = self._conn.execute(
-                    "UPDATE incidents SET assigned_to=? WHERE id=? AND clerk_user_id=?",
-                    (assigned_to, incident_id, clerk_user_id),
-                )
-            else:
-                cur = self._conn.execute(
-                    "UPDATE incidents SET assigned_to=? WHERE id=?",
-                    (assigned_to, incident_id),
-                )
-        return cur.rowcount > 0
+        if clerk_user_id:
+            updated = self._execute(
+                """
+                UPDATE incidents
+                SET assigned_to=:assigned_to
+                WHERE id=:incident_id AND clerk_user_id=:clerk_user_id
+                """,
+                {
+                    "assigned_to": assigned_to,
+                    "incident_id": incident_id,
+                    "clerk_user_id": clerk_user_id,
+                },
+            )
+        else:
+            updated = self._execute(
+                "UPDATE incidents SET assigned_to=:assigned_to WHERE id=:incident_id",
+                {"assigned_to": assigned_to, "incident_id": incident_id},
+            )
+        return updated > 0
 
     def seed_remediation_actions(
         self,
@@ -396,33 +513,40 @@ class Database:
         engineer_submission: str | None = None,
         source_anchor_action_id: str | None = None,
     ) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        with self._conn:
-            for text in actions:
-                self._conn.execute(
-                    """
-                    INSERT INTO remediation_actions
-                      (id, job_id, action_text, action_type, status, severity, created_at, engineer_submission, source_anchor_action_id)
-                    VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)
-                    """,
-                    (
-                        str(uuid.uuid4()),
-                        job_id,
-                        text,
-                        action_type,
-                        severity,
-                        now,
-                        engineer_submission,
-                        source_anchor_action_id,
-                    ),
+        now = self._now_iso()
+        for text in actions:
+            self._execute(
+                """
+                INSERT INTO remediation_actions (
+                  id, job_id, action_text, action_type, status,
+                  severity, created_at, engineer_submission, source_anchor_action_id
                 )
+                VALUES (
+                  :id, :job_id, :action_text, :action_type, 'pending',
+                  :severity, :created_at, :engineer_submission, :source_anchor_action_id
+                )
+                """,
+                {
+                    "id": str(uuid.uuid4()),
+                    "job_id": job_id,
+                    "action_text": text,
+                    "action_type": action_type,
+                    "severity": severity,
+                    "created_at": now,
+                    "engineer_submission": engineer_submission,
+                    "source_anchor_action_id": source_anchor_action_id,
+                },
+            )
 
     def list_remediation_actions(self, job_id: str) -> list[dict]:
-        rows = self._conn.execute(
-            "SELECT * FROM remediation_actions WHERE job_id=? ORDER BY created_at",
-            (job_id,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        return self._query(
+            """
+            SELECT * FROM remediation_actions
+            WHERE job_id=:job_id
+            ORDER BY created_at
+            """,
+            {"job_id": job_id},
+        )
 
     def update_remediation_action(
         self,
@@ -433,126 +557,136 @@ class Database:
         severity: str | None = None,
         due_date: str | None = None,
     ) -> bool:
-        parts: list[str] = []
-        vals: list[Any] = []
-        if status is not None:
-            parts.append("status=?")
-            vals.append(status)
-            if status == "done":
-                parts.append("completed_at=?")
-                vals.append(datetime.now(timezone.utc).isoformat())
-        if assigned_to is not None:
-            parts.append("assigned_to=?")
-            vals.append(assigned_to)
-        if notes is not None:
-            parts.append("notes=?")
-            vals.append(notes)
-        if severity is not None:
-            parts.append("severity=?")
-            vals.append(severity)
-        if due_date is not None:
-            parts.append("due_date=?")
-            vals.append(due_date)
-        if not parts:
-            return False
-        vals.append(action_id)
-        with self._conn:
-            cur = self._conn.execute(
-                f"UPDATE remediation_actions SET {', '.join(parts)} WHERE id=?",  # noqa: S608
-                vals,
-            )
-        return cur.rowcount > 0
+        updates: list[str] = []
+        params: dict[str, Any] = {"action_id": action_id}
 
-    def create_integration(self, clerk_user_id: str, int_type: str, config: dict, enabled: bool = True) -> str:
+        def _set(field: str, value: Any) -> None:
+            key = f"p_{field}"
+            updates.append(f"{field}=:{key}")
+            params[key] = value
+
+        if status is not None:
+            _set("status", status)
+            if status == "done":
+                _set("completed_at", self._now_iso())
+        if assigned_to is not None:
+            _set("assigned_to", assigned_to)
+        if notes is not None:
+            _set("notes", notes)
+        if severity is not None:
+            _set("severity", severity)
+        if due_date is not None:
+            _set("due_date", due_date)
+
+        if not updates:
+            return False
+
+        updated = self._execute(
+            f"UPDATE remediation_actions SET {', '.join(updates)} WHERE id=:action_id",
+            params,
+        )
+        return updated > 0
+
+    def create_integration(
+        self, clerk_user_id: str, int_type: str, config: dict, enabled: bool = True
+    ) -> str:
         int_id = str(uuid.uuid4())
-        with self._conn:
-            self._conn.execute(
-                """
-                INSERT INTO integrations (id, clerk_user_id, type, config_json, enabled, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    int_id,
-                    clerk_user_id,
-                    int_type,
-                    json.dumps(config),
-                    1 if enabled else 0,
-                    datetime.now(timezone.utc).isoformat(),
-                ),
+        uid = clerk_user_id or "anonymous"
+        self._ensure_user(uid)
+        self._execute(
+            """
+            INSERT INTO integrations (
+              id, clerk_user_id, type, config_json, enabled, created_at
             )
+            VALUES (
+              :id, :clerk_user_id, :type, :config_json, :enabled, :created_at
+            )
+            """,
+            {
+                "id": int_id,
+                "clerk_user_id": uid,
+                "type": int_type,
+                "config_json": json.dumps(config),
+                "enabled": enabled,
+                "created_at": self._now_iso(),
+            },
+        )
         return int_id
 
     def list_integrations(self, clerk_user_id: str) -> list[dict]:
-        rows = self._conn.execute(
-            "SELECT * FROM integrations WHERE clerk_user_id=? ORDER BY created_at DESC",
-            (clerk_user_id,),
-        ).fetchall()
-        out = []
-        for r in rows:
-            d = dict(r)
+        rows = self._query(
+            """
+            SELECT * FROM integrations
+            WHERE clerk_user_id=:clerk_user_id
+            ORDER BY created_at DESC
+            """,
+            {"clerk_user_id": clerk_user_id},
+        )
+        out: list[dict] = []
+        for row in rows:
+            item = dict(row)
             try:
-                d["config"] = json.loads(d.pop("config_json", "{}"))
+                item["config"] = json.loads(item.pop("config_json", "{}") or "{}")
             except json.JSONDecodeError:
-                d["config"] = {}
-            d["enabled"] = bool(d.get("enabled", 1))
-            out.append(d)
+                item["config"] = {}
+            item["enabled"] = bool(item.get("enabled", True))
+            out.append(item)
         return out
 
     def delete_integration(self, integration_id: str, clerk_user_id: str) -> bool:
-        with self._conn:
-            cur = self._conn.execute(
-                "DELETE FROM integrations WHERE id=? AND clerk_user_id=?",
-                (integration_id, clerk_user_id),
-            )
-        return cur.rowcount > 0
+        updated = self._execute(
+            """
+            DELETE FROM integrations
+            WHERE id=:integration_id AND clerk_user_id=:clerk_user_id
+            """,
+            {"integration_id": integration_id, "clerk_user_id": clerk_user_id},
+        )
+        return updated > 0
 
     def save_clarification_answers(self, job_id: str, answers: dict) -> None:
-        with self._conn:
-            self._conn.execute(
-                "UPDATE jobs SET clarification_answers_json=? WHERE id=?",
-                (json.dumps(answers), job_id),
-            )
+        self._execute(
+            """
+            UPDATE jobs
+            SET clarification_answers_json=:answers
+            WHERE id=:job_id
+            """,
+            {"answers": json.dumps(answers), "job_id": job_id},
+        )
 
     def get_clarification_answers(self, job_id: str) -> dict | None:
-        row = self._conn.execute(
-            "SELECT clarification_answers_json FROM jobs WHERE id=?",
-            (job_id,),
-        ).fetchone()
-        if not row or not row["clarification_answers_json"]:
+        row = self._query_one(
+            "SELECT clarification_answers_json FROM jobs WHERE id=:job_id",
+            {"job_id": job_id},
+        )
+        raw = (row or {}).get("clarification_answers_json")
+        if not raw:
             return None
         try:
-            return json.loads(row["clarification_answers_json"])
+            return json.loads(raw)
         except json.JSONDecodeError:
             return None
 
     def delete_remediation_actions(self, job_id: str) -> None:
-        with self._conn:
-            self._conn.execute(
-                "DELETE FROM remediation_actions WHERE job_id=?",
-                (job_id,),
-            )
+        self._execute(
+            "DELETE FROM remediation_actions WHERE job_id=:job_id", {"job_id": job_id}
+        )
 
     def update_analysis_remediation(self, job_id: str, remediation_json: str) -> None:
-        """Patch the remediation field inside analysis_json for a completed job."""
-        row = self._conn.execute(
-            "SELECT analysis_json FROM jobs WHERE id=?",
-            (job_id,),
-        ).fetchone()
-        if not row or not row["analysis_json"]:
+        row = self._query_one(
+            "SELECT analysis_json FROM jobs WHERE id=:job_id", {"job_id": job_id}
+        )
+        raw = (row or {}).get("analysis_json")
+        if not raw:
             return
         try:
-            analysis = json.loads(row["analysis_json"])
-        except json.JSONDecodeError:
-            return
-        try:
+            analysis = json.loads(raw)
             analysis["remediation"] = json.loads(remediation_json)
         except json.JSONDecodeError:
             return
-        with self._conn:
-            self._conn.execute(
-                "UPDATE jobs SET analysis_json=? WHERE id=?",
-                (json.dumps(analysis), job_id),
-            )
+        self._execute(
+            "UPDATE jobs SET analysis_json=:analysis_json WHERE id=:job_id",
+            {"job_id": job_id, "analysis_json": json.dumps(analysis)},
+        )
 
     def create_follow_up(
         self,
@@ -564,78 +698,103 @@ class Database:
         user_name: str | None = None,
         message: str | None = None,
     ) -> str:
-        fu_id = str(uuid.uuid4())
-        with self._conn:
-            self._conn.execute(
-                """
-                INSERT INTO follow_ups
-                  (id, job_id, action_id, clerk_user_id, user_email, user_name, message, remind_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    fu_id, job_id, action_id, clerk_user_id,
-                    user_email, user_name, message, remind_at,
-                    datetime.now(timezone.utc).isoformat(),
-                ),
+        follow_up_id = str(uuid.uuid4())
+        uid = clerk_user_id or "anonymous"
+        self._ensure_user(uid, email=user_email)
+        self._execute(
+            """
+            INSERT INTO follow_ups (
+              id, job_id, action_id, clerk_user_id, user_email,
+              user_name, message, remind_at, created_at
             )
-        return fu_id
+            VALUES (
+              :id, :job_id, :action_id, :clerk_user_id, :user_email,
+              :user_name, :message, :remind_at, :created_at
+            )
+            """,
+            {
+                "id": follow_up_id,
+                "job_id": job_id,
+                "action_id": action_id,
+                "clerk_user_id": uid,
+                "user_email": user_email,
+                "user_name": user_name,
+                "message": message,
+                "remind_at": remind_at,
+                "created_at": self._now_iso(),
+            },
+        )
+        return follow_up_id
 
     def list_follow_ups(self, job_id: str) -> list[dict]:
-        rows = self._conn.execute(
-            "SELECT * FROM follow_ups WHERE job_id=? ORDER BY remind_at",
-            (job_id,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        return self._query(
+            "SELECT * FROM follow_ups WHERE job_id=:job_id ORDER BY remind_at",
+            {"job_id": job_id},
+        )
 
     def delete_follow_up(self, follow_up_id: str, clerk_user_id: str) -> bool:
-        with self._conn:
-            cur = self._conn.execute(
-                "DELETE FROM follow_ups WHERE id=? AND clerk_user_id=?",
-                (follow_up_id, clerk_user_id),
-            )
-        return cur.rowcount > 0
+        updated = self._execute(
+            """
+            DELETE FROM follow_ups
+            WHERE id=:follow_up_id AND clerk_user_id=:clerk_user_id
+            """,
+            {"follow_up_id": follow_up_id, "clerk_user_id": clerk_user_id},
+        )
+        return updated > 0
 
     def get_pending_follow_ups(self, before_iso: str) -> list[dict]:
-        """Return unsent follow-ups whose remind_at is <= before_iso."""
-        rows = self._conn.execute(
-            "SELECT * FROM follow_ups WHERE sent_at IS NULL AND remind_at <= ? ORDER BY remind_at",
-            (before_iso,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        return self._query(
+            """
+            SELECT * FROM follow_ups
+            WHERE sent_at IS NULL AND remind_at <= :before_iso
+            ORDER BY remind_at
+            """,
+            {"before_iso": before_iso},
+        )
 
     def mark_follow_up_sent(self, follow_up_id: str) -> None:
-        with self._conn:
-            self._conn.execute(
-                "UPDATE follow_ups SET sent_at=? WHERE id=?",
-                (datetime.now(timezone.utc).isoformat(), follow_up_id),
-            )
+        self._execute(
+            "UPDATE follow_ups SET sent_at=:sent_at WHERE id=:follow_up_id",
+            {"sent_at": self._now_iso(), "follow_up_id": follow_up_id},
+        )
 
     def save_chat_message(self, job_id: str, action_id: str, role: str, content: str) -> str:
         msg_id = str(uuid.uuid4())
-        with self._conn:
-            self._conn.execute(
-                """
-                INSERT INTO chat_messages (id, job_id, action_id, role, content, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (msg_id, job_id, action_id, role, content, datetime.now(timezone.utc).isoformat()),
-            )
+        self._execute(
+            """
+            INSERT INTO chat_messages (id, job_id, action_id, role, content, created_at)
+            VALUES (:id, :job_id, :action_id, :role, :content, :created_at)
+            """,
+            {
+                "id": msg_id,
+                "job_id": job_id,
+                "action_id": action_id,
+                "role": role,
+                "content": content,
+                "created_at": self._now_iso(),
+            },
+        )
         return msg_id
 
     def list_chat_messages(self, job_id: str, action_id: str) -> list[dict]:
-        rows = self._conn.execute(
-            "SELECT * FROM chat_messages WHERE job_id=? AND action_id=? ORDER BY created_at",
-            (job_id, action_id),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        return self._query(
+            """
+            SELECT * FROM chat_messages
+            WHERE job_id=:job_id AND action_id=:action_id
+            ORDER BY created_at
+            """,
+            {"job_id": job_id, "action_id": action_id},
+        )
 
     def list_chat_messages_for_job(self, job_id: str) -> list[dict]:
-        """All remediation chat lines for a job, for audit / workflow export."""
-        rows = self._conn.execute(
-            "SELECT * FROM chat_messages WHERE job_id=? ORDER BY action_id, created_at",
-            (job_id,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        return self._query(
+            """
+            SELECT * FROM chat_messages
+            WHERE job_id=:job_id
+            ORDER BY action_id, created_at
+            """,
+            {"job_id": job_id},
+        )
 
     def seed_trail_action(
         self,
@@ -645,51 +804,61 @@ class Database:
         action_type: str,
         parent_action_id: str,
     ) -> str:
-        """Create a child (trail) action linked to a parent action."""
         action_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
-        with self._conn:
-            self._conn.execute(
-                """
-                INSERT INTO remediation_actions
-                  (id, job_id, action_text, action_type, status, severity, parent_action_id, created_at)
-                VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)
-                """,
-                (action_id, job_id, action_text, action_type, severity, parent_action_id, now),
+        self._execute(
+            """
+            INSERT INTO remediation_actions (
+              id, job_id, action_text, action_type, status,
+              severity, parent_action_id, created_at
             )
+            VALUES (
+              :id, :job_id, :action_text, :action_type, 'pending',
+              :severity, :parent_action_id, :created_at
+            )
+            """,
+            {
+                "id": action_id,
+                "job_id": job_id,
+                "action_text": action_text,
+                "action_type": action_type,
+                "severity": severity,
+                "parent_action_id": parent_action_id,
+                "created_at": self._now_iso(),
+            },
+        )
         return action_id
 
     def save_action_eval_response(self, action_id: str, response: str) -> None:
-        """Persist the LLM evaluation response text on an action."""
-        with self._conn:
-            self._conn.execute(
-                "UPDATE remediation_actions SET eval_response=? WHERE id=?",
-                (response, action_id),
-            )
+        self._execute(
+            """
+            UPDATE remediation_actions
+            SET eval_response=:eval_response
+            WHERE id=:action_id
+            """,
+            {"eval_response": response, "action_id": action_id},
+        )
 
     def get_action(self, action_id: str) -> dict | None:
-        row = self._conn.execute(
-            "SELECT * FROM remediation_actions WHERE id=?",
-            (action_id,),
-        ).fetchone()
-        return dict(row) if row else None
+        return self._query_one(
+            "SELECT * FROM remediation_actions WHERE id=:action_id",
+            {"action_id": action_id},
+        )
 
     def save_pir(self, job_id: str, pir_json: str) -> None:
-        with self._conn:
-            self._conn.execute(
-                "UPDATE jobs SET pir_json=? WHERE id=?",
-                (pir_json, job_id),
-            )
+        self._execute(
+            "UPDATE jobs SET pir_json=:pir_json WHERE id=:job_id",
+            {"pir_json": pir_json, "job_id": job_id},
+        )
 
     def get_pir(self, job_id: str) -> dict | None:
-        row = self._conn.execute(
-            "SELECT pir_json FROM jobs WHERE id=?",
-            (job_id,),
-        ).fetchone()
-        if not row or not row["pir_json"]:
+        row = self._query_one(
+            "SELECT pir_json FROM jobs WHERE id=:job_id", {"job_id": job_id}
+        )
+        raw = (row or {}).get("pir_json")
+        if not raw:
             return None
         try:
-            return json.loads(row["pir_json"])
+            return json.loads(raw)
         except json.JSONDecodeError:
             return None
 
@@ -700,23 +869,42 @@ class Database:
         resolution_notes: str | None,
         clerk_user_id: str | None = None,
     ) -> bool:
-        resolved_at = datetime.now(timezone.utc).isoformat() if status == "resolved" else None
-        with self._conn:
-            if clerk_user_id:
-                cur = self._conn.execute(
-                    """UPDATE incidents
-                       SET status=?, resolution_notes=?, resolved_at=COALESCE(?, resolved_at)
-                       WHERE id=? AND clerk_user_id=?""",
-                    (status, resolution_notes, resolved_at, incident_id, clerk_user_id),
-                )
-            else:
-                cur = self._conn.execute(
-                    """UPDATE incidents
-                       SET status=?, resolution_notes=?, resolved_at=COALESCE(?, resolved_at)
-                       WHERE id=?""",
-                    (status, resolution_notes, resolved_at, incident_id),
-                )
-        return cur.rowcount > 0
+        resolved_at = self._now_iso() if status == "resolved" else None
+        if clerk_user_id:
+            updated = self._execute(
+                """
+                UPDATE incidents
+                SET status=:status,
+                    resolution_notes=:resolution_notes,
+                    resolved_at=COALESCE(:resolved_at, resolved_at)
+                WHERE id=:incident_id AND clerk_user_id=:clerk_user_id
+                """,
+                {
+                    "status": status,
+                    "resolution_notes": resolution_notes,
+                    "resolved_at": resolved_at,
+                    "incident_id": incident_id,
+                    "clerk_user_id": clerk_user_id,
+                },
+            )
+        else:
+            updated = self._execute(
+                """
+                UPDATE incidents
+                SET status=:status,
+                    resolution_notes=:resolution_notes,
+                    resolved_at=COALESCE(:resolved_at, resolved_at)
+                WHERE id=:incident_id
+                """,
+                {
+                    "status": status,
+                    "resolution_notes": resolution_notes,
+                    "resolved_at": resolved_at,
+                    "incident_id": incident_id,
+                },
+            )
+        return updated > 0
 
     def close(self) -> None:
-        self._conn.close()
+        """No persistent connection to close for Data API client."""
+        return None

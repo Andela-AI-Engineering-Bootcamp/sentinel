@@ -118,6 +118,7 @@ resource "aws_lambda_function" "agents" {
       BEDROCK_MODEL_SUPPORT     = var.support_model
       AURORA_CLUSTER_ARN        = var.aurora_cluster_arn
       AURORA_SECRET_ARN         = var.aurora_secret_arn
+      AURORA_DATABASE           = var.aurora_database
       SQS_QUEUE_URL             = aws_sqs_queue.jobs.id
     }
   }

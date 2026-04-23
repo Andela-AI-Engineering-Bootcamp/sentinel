@@ -1,4 +1,4 @@
-"""Schema placeholders for Sentinel DB-centric workflows."""
+"""Minimal schema models for Aurora-backed database utilities."""
 
 from __future__ import annotations
 
@@ -9,4 +9,10 @@ class IncidentRecord(BaseModel):
     incident_id: str
     title: str | None = Field(default=None)
     source: str
+    created_at: str
+
+
+class ClerkUserRecord(BaseModel):
+    clerk_user_id: str
+    email: str | None = None
     created_at: str

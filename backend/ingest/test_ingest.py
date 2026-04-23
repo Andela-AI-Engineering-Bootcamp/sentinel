@@ -1,24 +1,36 @@
-"""Simple ingest lambda test."""
+"""Simple ingest lambda test (Aurora Data API)."""
 
 from __future__ import annotations
 
 import json
-import os
 import sys
-import tempfile
 from pathlib import Path
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
+from common.config import aurora_cluster_arn, aurora_database, aurora_secret_arn
+from common.store import Database
+from database.src.db import load_sql_statements, migration_file
 from ingest.ingest_lambda import lambda_handler
 
 
+def _ensure_env() -> None:
+    if not aurora_cluster_arn() or not aurora_secret_arn():
+        raise RuntimeError(
+            "Missing Aurora env. Set AURORA_CLUSTER_ARN and AURORA_SECRET_ARN before running tests."
+        )
+
+
 def main() -> None:
-    fd, path = tempfile.mkstemp(prefix="sentinel_ingest_test_", suffix=".db")
-    os.close(fd)
-    os.environ["SENTINEL_DB_PATH"] = path
+    _ensure_env()
+
+    db = Database(aurora_database())
+    try:
+        db.execute_script(load_sql_statements(migration_file()))
+    finally:
+        db.close()
 
     event = {
         "body": json.dumps(
