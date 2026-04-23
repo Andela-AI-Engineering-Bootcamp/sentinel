@@ -15,6 +15,9 @@ Deploy planner + 4 specialist agents with SQS orchestration.
 
 ## Deploy Infra
 ```bash
+cd backend
+uv run package_docker.py
+
 cd terraform/6_agents
 cp terraform.tfvars.example terraform.tfvars
 terraform init

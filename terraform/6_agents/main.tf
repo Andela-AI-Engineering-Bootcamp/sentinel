@@ -8,15 +8,31 @@ provider "aws" {
 
 resource "aws_sqs_queue" "dlq" {
   name = "${var.sqs_queue_name}-dlq"
+
+  tags = {
+    Project = "sentinel"
+    Part    = "6"
+  }
 }
 
 resource "aws_sqs_queue" "jobs" {
   name = var.sqs_queue_name
+  delay_seconds             = 0
+  max_message_size          = 262144
+  message_retention_seconds = 86400  # 1 day
+  receive_wait_time_seconds = 10     # Long polling
+  visibility_timeout_seconds = 910   # 15 minutes + 10 seconds buffer (matches Planner Lambda timeout)
+  
 
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.dlq.arn
     maxReceiveCount     = 3
   })
+
+  tags = {
+    Project = "sentinel"
+    Part    = "6"
+  }
 }
 
 resource "aws_iam_role" "agent_role" {
@@ -30,6 +46,11 @@ resource "aws_iam_role" "agent_role" {
       Action = "sts:AssumeRole"
     }]
   })
+
+  tags = {
+    Project = "sentinel"
+    Part    = "6"
+  }
 }
 
 resource "aws_iam_role_policy_attachment" "basic" {
@@ -99,6 +120,11 @@ resource "aws_lambda_function" "agents" {
       AURORA_SECRET_ARN         = var.aurora_secret_arn
       SQS_QUEUE_URL             = aws_sqs_queue.jobs.id
     }
+  }
+
+  tags = {
+    Project = "sentinel"
+    Part    = "6"
   }
 }
 

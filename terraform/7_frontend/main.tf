@@ -6,9 +6,44 @@ provider "aws" {
   region = var.aws_region
 }
 
+# Data sources
+data "aws_caller_identity" "current" {}
+
+data "aws_region" "current" {}
+
+# Reference Part 5 Database resources
+data "terraform_remote_state" "database" {
+  backend = "local"
+  config = {
+    path = "../5_database/terraform.tfstate"
+  }
+}
+
+# Reference Part 6 Agents resources
+data "terraform_remote_state" "agents" {
+  backend = "local"
+  config = {
+    path = "../6_agents/terraform.tfstate"
+  }
+}
+
+locals {
+  name_prefix = "sentinel"
+
+  common_tags = {
+    Project     = "sentinel"
+    Part        = "7_frontend"
+    ManagedBy   = "terraform"
+  }
+}
+
+
 resource "aws_s3_bucket" "frontend" {
   bucket = var.frontend_bucket_name
+  tags   = local.common_tags
 }
+
+
 
 resource "aws_s3_bucket_website_configuration" "frontend" {
   bucket = aws_s3_bucket.frontend.id
@@ -49,6 +84,7 @@ resource "aws_s3_bucket_policy" "frontend_public" {
 
 resource "aws_iam_role" "api_lambda_role" {
   name = "sentinel-api-lambda-role"
+  tags = local.common_tags
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -69,10 +105,37 @@ resource "aws_lambda_function" "api" {
   function_name = var.api_lambda_name
   role          = aws_iam_role.api_lambda_role.arn
   runtime       = "python3.12"
-  handler       = "lambda_handler.handler"
+  handler       = "api.lambda_handler.handler"
   filename      = var.api_lambda_zip
+  source_code_hash = filebase64sha256(var.api_lambda_zip)
   timeout       = 60
   memory_size   = 1024
+  tags = local.common_tags
+
+  environment {
+    variables = {
+      # Database configuration from Part 5
+      AURORA_CLUSTER_ARN = data.terraform_remote_state.database.outputs.aurora_cluster_arn
+      AURORA_SECRET_ARN  = data.terraform_remote_state.database.outputs.aurora_secret_arn
+      AURORA_DATABASE    = data.terraform_remote_state.database.outputs.database_name
+      DEFAULT_AWS_REGION = var.aws_region
+
+      # SQS configuration from Part 6
+      SQS_QUEUE_URL = data.terraform_remote_state.agents.outputs.sqs_queue_url
+
+      # Clerk configuration for JWT validation
+      CLERK_JWKS_URL = var.clerk_jwks_url
+      CLERK_ISSUER   = var.clerk_issuer
+
+      # Runtime configuration for the current SQLite-backed API implementation
+      SENTINEL_DB_PATH = "/tmp/sentinel.db"
+      AUTH_DISABLED    = "false"
+
+      # CORS configuration consumed by the FastAPI app
+      ALLOWED_ORIGINS = "http://localhost:3000,https://${aws_cloudfront_distribution.frontend.domain_name}"
+    }
+  }
+
 }
 
 resource "aws_apigatewayv2_api" "api" {
@@ -109,7 +172,10 @@ resource "aws_lambda_permission" "allow_http_api" {
 
 resource "aws_cloudfront_distribution" "frontend" {
   enabled             = true
+  is_ipv6_enabled     = true
   default_root_object = "index.html"
+  tags                = local.common_tags
+  comment             = "Sentinel Frontend"
 
   origin {
     domain_name = aws_s3_bucket_website_configuration.frontend.website_endpoint

@@ -1,6 +1,6 @@
 variable "aws_region" {
   type    = string
-  default = "us-east-1"
+  default = "eu-west-1"
 }
 
 variable "endpoint_name" {
@@ -25,5 +25,5 @@ variable "hf_model_id" {
 
 variable "huggingface_image_uri" {
   type    = string
-  default = "763104351884.dkr.ecr.us-east-1.amazonaws.com/huggingface-pytorch-inference:2.1.0-transformers4.37.0-cpu-py310-ubuntu22.04"
+  default = "763104351884.dkr.ecr.eu-west-1.amazonaws.com/huggingface-pytorch-inference:2.1.0-transformers4.37.0-cpu-py310-ubuntu22.04"
 }

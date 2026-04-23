@@ -17,6 +17,9 @@ Configure backend `.env`:
 
 ## Local Run
 ```bash
+cd frontend
+npm install
+
 cd scripts
 uv run run_local.py
 ```
@@ -42,6 +45,8 @@ terraform apply
 
 ## Deploy Frontend Assets
 ```bash
+export SENTINEL_FRONTEND_BUCKET={bucketname}
+
 cd ../../scripts
 uv run deploy.py
 ```

@@ -1,8 +1,11 @@
 """Sentinel API service."""
 
 from __future__ import annotations
-from dotenv import load_dotenv
-load_dotenv()
+
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - optional for local dev only
+    load_dotenv = None
 
 import asyncio
 import json
@@ -44,6 +47,9 @@ from common.store import Database
 from investigator.agent import parse_streamed_root_cause, stream_investigation_text
 
 logger = logging.getLogger(__name__)
+
+if load_dotenv is not None:
+    load_dotenv()
 
 
 app = FastAPI(title="Sentinel API", version="0.3.0")

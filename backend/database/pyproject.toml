@@ -3,4 +3,4 @@ name = "sentinel-database"
 version = "0.1.0"
 description = "Sentinel database package"
 requires-python = ">=3.12"
-dependencies = ["boto3", "pydantic"]
+dependencies = ["boto3", "pydantic", "python-dotenv"]

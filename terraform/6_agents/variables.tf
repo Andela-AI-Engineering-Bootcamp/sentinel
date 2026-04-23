@@ -1,6 +1,6 @@
 variable "aws_region" {
   type    = string
-  default = "us-east-1"
+  default = "eu-west-1"
 }
 
 variable "sqs_queue_name" {
@@ -27,19 +27,24 @@ variable "lambda_zip_paths" {
   }
 }
 
+variable "bedrock_model_id" {
+  type        = string
+  default = "openai.gpt-oss-120b-1:0"
+}
+
 variable "bedrock_region" {
   type    = string
-  default = "us-east-1"
+  default = "eu-west-1"
 }
 
 variable "root_cause_model" {
   type    = string
-  default = "us.amazon.nova-pro-v1:0"
+  default = "eu.amazon.nova-pro-v1:0"
 }
 
 variable "remediation_model" {
   type    = string
-  default = "us.amazon.nova-pro-v1:0"
+  default = "eu.amazon.nova-pro-v1:0"
 }
 
 variable "support_model" {

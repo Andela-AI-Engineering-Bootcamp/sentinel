@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
+
+from src.pathing import ensure_backend_root_on_path
+
+ensure_backend_root_on_path()
 
 from common.config import get_db_path
 from common.store import Database

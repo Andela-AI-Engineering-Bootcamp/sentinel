@@ -1,6 +1,6 @@
 variable "aws_region" {
   type    = string
-  default = "us-east-1"
+  default = "eu-west-1"
 }
 
 variable "frontend_bucket_name" {
@@ -15,4 +15,16 @@ variable "api_lambda_zip" {
 variable "api_lambda_name" {
   type    = string
   default = "sentinel-api"
+}
+
+# Clerk validation happens in Lambda, not at API Gateway level
+variable "clerk_jwks_url" {
+  description = "Clerk JWKS URL for JWT validation in Lambda"
+  type        = string
+}
+
+variable "clerk_issuer" {
+  description = "Clerk issuer URL (kept for Lambda environment)"
+  type        = string
+  default     = ""  # Not actually used but kept for backwards compatibility
 }

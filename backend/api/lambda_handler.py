@@ -2,7 +2,7 @@
 
 from mangum import Mangum
 
-from main import app
+from api.main import app
 
 
 handler = Mangum(app)

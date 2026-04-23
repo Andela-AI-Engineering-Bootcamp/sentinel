@@ -7,7 +7,7 @@ provider "aws" {
 }
 
 resource "aws_iam_role" "sagemaker_execution" {
-  name = "sentinel-sagemaker-execution-role"
+  name = "sentinel-sagemaker-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -19,7 +19,7 @@ resource "aws_iam_role" "sagemaker_execution" {
   })
 }
 
-resource "aws_iam_role_policy_attachment" "sagemaker_full" {
+resource "aws_iam_role_policy_attachment" "sagemaker_full_access" {
   role       = aws_iam_role.sagemaker_execution.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSageMakerFullAccess"
 }
@@ -36,6 +36,8 @@ resource "aws_sagemaker_model" "embedding_model" {
       HF_TASK     = "feature-extraction"
     }
   }
+
+  depends_on = [aws_iam_role_policy_attachment.sagemaker_full_access]
 }
 
 resource "aws_sagemaker_endpoint_configuration" "embedding_config" {
@@ -51,7 +53,19 @@ resource "aws_sagemaker_endpoint_configuration" "embedding_config" {
   }
 }
 
+resource "time_sleep" "wait_for_iam_propagation" {
+  depends_on = [
+    aws_iam_role_policy_attachment.sagemaker_full_access
+  ]
+  
+  create_duration = "15s"
+}
+
 resource "aws_sagemaker_endpoint" "embedding_endpoint" {
   name                 = var.endpoint_name
   endpoint_config_name = aws_sagemaker_endpoint_configuration.embedding_config.name
+
+  depends_on = [
+    time_sleep.wait_for_iam_propagation
+  ]
 }

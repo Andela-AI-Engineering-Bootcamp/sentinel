@@ -1,6 +1,6 @@
 variable "aws_region" {
   type    = string
-  default = "us-east-1"
+  default = "eu-west-1"
 }
 
 variable "service_name" {
@@ -8,22 +8,38 @@ variable "service_name" {
   default = "sentinel-intel"
 }
 
-variable "ecr_repo_name" {
-  type    = string
-  default = "sentinel-intel"
+variable "openai_api_key" {
+  description = "OpenAI API key for the researcher agent"
+  type        = string
+  sensitive   = true
 }
 
-variable "image_identifier" {
+variable "sentinel_ingest_api_endpoint" {
+  description = "Sentinel Ingest API endpoint from Part 3"
   type        = string
-  description = "ECR image URI with tag, e.g. 123456789012.dkr.ecr.us-east-1.amazonaws.com/sentinel-intel:latest"
+}
+
+variable "sentinel_ingest_api_key" {
+  description = "Sentinel Ingest API key from Part 3"
+  type        = string
+  sensitive   = true
+}
+
+variable "scheduler_enabled" {
+  description = "Enable automated research scheduler"
+  type        = bool
+  default     = false
+}
+
+variable "bedrock_model_id" {
+  description = "Bedrock model ID used by researcher (without the bedrock/ prefix)"
+  type        = string
+  default     = "openai.gpt-oss-120b-1:0"
 }
 
 variable "bedrock_region" {
   type    = string
-  default = "us-east-1"
+  default = "eu-west-1"
 }
 
-variable "support_model_id" {
-  type    = string
-  default = "openai.gpt-oss-120b-1:0"
-}
+

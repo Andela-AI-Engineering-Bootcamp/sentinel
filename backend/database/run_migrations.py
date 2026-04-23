@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from src.pathing import ensure_backend_root_on_path
+
+ensure_backend_root_on_path()
+
 from src.db import get_database
 
 
