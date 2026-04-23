@@ -66,6 +66,7 @@ def on_startup() -> None:
     """Wake up the background scheduler when the API starts."""
     ReminderScheduler.get_instance().ensure_running()
 
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins or ["*"],
@@ -474,9 +475,7 @@ def get_workflow_snapshot(
 
 
 @app.get("/api/jobs/{job_id}/audit/pdf")
-def get_audit_pdf(
-    job_id: str, user: AuthContext = Depends(require_auth)
-) -> Any:
+def get_audit_pdf(job_id: str, user: AuthContext = Depends(require_auth)) -> Any:
     """Download full workflow as a traditional (Classic) black-on-white audit PDF."""
     db = _db()
     try:
@@ -715,19 +714,28 @@ def patch_action(
 # ── Action chat ───────────────────────────────────────────────────────────────
 
 _ACTION_CHAT_SYSTEM = """\
-You are Sentinel's remediation assistant — a senior SRE helping an on-call engineer \
-resolve a live incident.
+You are Sentinel's remediation assistant — a knowledgeable, calm SRE colleague \
+helping an on-call engineer work through a live incident. You're here to make a \
+stressful situation easier, so be warm, direct, and genuinely helpful.
 
-Rules you must follow in every response:
-- Be concise. Short, direct sentences. No filler or preamble.
-- Do NOT include code blocks or raw commands. Describe actions in plain language.
-- You MAY recommend specific tools, packages, or modules by name (e.g. "use kubectl's \
-  rollout undo", "the boto3 EC2 client", "PagerDuty's incident API") but always as \
-  prose, never as a code snippet.
-- Give numbered steps only when the answer is a sequence; otherwise answer directly.
-- If you need one critical piece of missing context, ask it — but never ask more than \
-  one question at a time.
-- Never say "it depends" without immediately following with a concrete default.
+Your focus is the incident and remediation task described below. You're great at:
+- Explaining what went wrong and why, in plain language.
+- Suggesting code fixes, patches, or config changes that address the specific issue.
+- Walking through remediation steps, tool commands, or runbook guidance.
+- Helping make sense of a log line, stack trace, or error message from the incident.
+
+If someone asks about something unrelated to this incident — a different system, \
+a general coding question, or anything off-topic — gently let them know you're \
+focused on the current incident and briefly offer what you can help with instead. \
+Keep the redirect short and friendly; don't lecture.
+
+A few things to keep in mind:
+- Be concise but human. Short, clear sentences — no corporate filler or excessive \
+  disclaimers.
+- Code snippets and commands are fine when they help fix the issue directly.
+- Use numbered steps only for sequences; answer directly otherwise.
+- If you need one key piece of missing context, ask — but only one question at a time.
+- Never say "it depends" without immediately offering a concrete default.
 """
 
 
@@ -762,6 +770,7 @@ def stream_action_chat(
     """Stream an LLM conversation scoped to a single remediation action and persist both turns."""
     from common.bedrock import converse_stream_chat
     from common.config import model_root_cause
+    from common.guardrails import sanitize_chat_message
 
     db = _db()
     try:
@@ -773,6 +782,16 @@ def stream_action_chat(
         action = next((a for a in actions if str(a["id"]) == str(action_id)), None)
         if not action:
             raise HTTPException(status_code=404, detail="Action not found")
+
+        # Sanitize the incoming user message before it touches the LLM or DB.
+        clean_message, msg_report = sanitize_chat_message(body.message)
+        if msg_report.unsafe_content_removed:
+            logger.warning(
+                "Chat message for job %s action %s contained unsafe content: %s",
+                job_id,
+                action_id,
+                msg_report.notes,
+            )
 
         view = _job_view(row)
         analysis = view.get("analysis") or {}
@@ -789,17 +808,27 @@ def stream_action_chat(
         action_text = action.get("action_text", "")
 
         context_block = (
-            f"INCIDENT SUMMARY: {summary_text}\n"
-            f"ROOT CAUSE: {root_cause_text}\n"
-            f"TASK THE ENGINEER IS WORKING ON: {action_text}"
+            "── Current incident ──\n"
+            f"SUMMARY: {summary_text or '(not available)'}\n"
+            f"ROOT CAUSE: {root_cause_text or '(not available)'}\n"
+            f"REMEDIATION TASK: {action_text or '(not available)'}\n\n"
+            "Stay focused on the above. If a question drifts off-topic, "
+            "redirect warmly and briefly."
         )
         system_prompt = f"{_ACTION_CHAT_SYSTEM}\n\n{context_block}"
 
-        messages = [{"role": m.role, "content": m.content} for m in body.history]
-        messages.append({"role": "user", "content": body.message})
+        # Re-fetch history from DB — never trust the client-supplied history,
+        # which could contain fabricated assistant turns or injected system roles.
+        db_history = db.list_chat_messages(job_id, action_id)
+        messages: list[dict[str, str]] = [
+            {"role": m["role"], "content": m["content"]}
+            for m in db_history
+            if m["role"] in ("user", "assistant")  # belt-and-suspenders role guard
+        ]
+        messages.append({"role": "user", "content": clean_message})
 
-        # Persist user message
-        db.save_chat_message(job_id, action_id, "user", body.message)
+        # Persist the sanitized user message now so the DB is consistent before streaming.
+        db.save_chat_message(job_id, action_id, "user", clean_message)
 
     finally:
         db.close()
@@ -813,7 +842,7 @@ def stream_action_chat(
                 parts.append(chunk)
                 yield f"data: {json.dumps({'chunk': chunk})}\n\n"
         finally:
-            # Persist whatever was accumulated, even on early client disconnect
+            # Persist whatever was accumulated, even on early client disconnect.
             full_response = "".join(parts)
             if full_response:
                 try:
@@ -903,7 +932,7 @@ def send_pending_follow_ups(
     return {"sent": sent, "failed": failed}
 
 
-# ── Clarification Q&A ─────────────────────────────────────────────────────────
+# ── Clarification Q&A
 
 
 @app.get("/api/jobs/{job_id}/clarification-questions")
@@ -1010,7 +1039,7 @@ def submit_clarifications(
         db.close()
 
 
-# ── Integrations hub ──────────────────────────────────────────────────────────
+# ── Integrations hub
 
 
 @app.get("/api/integrations")
