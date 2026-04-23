@@ -137,7 +137,11 @@ class Database:
     def _ensure_column(self, table: str, column: str, definition: str) -> None:
         cols = [row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})").fetchall()]
         if column not in cols:
-            self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+            try:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" not in str(e).lower():
+                    raise
 
     def create_incident(
         self,

@@ -52,3 +52,11 @@ def openrouter_model() -> str:
 
 def openrouter_base_url() -> str:
     return os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+
+
+def reminder_interval_seconds() -> int:
+    """Interval in seconds between background reminder checks."""
+    try:
+        return int(os.getenv("REMINDER_INTERVAL_SECONDS", "60"))
+    except ValueError:
+        return 60

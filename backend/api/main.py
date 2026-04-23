@@ -1,6 +1,8 @@
 """Sentinel API service."""
 
 from __future__ import annotations
+from dotenv import load_dotenv
+load_dotenv()
 
 import asyncio
 import json
@@ -33,6 +35,7 @@ from common.models import (
 )
 from common.pdf_report import render_job_pdf
 from common.pipeline import create_incident_and_job, parse_analysis, run_job
+from common.scheduler import ReminderScheduler
 from common.store import Database
 from investigator.agent import parse_streamed_root_cause, stream_investigation_text
 
@@ -46,6 +49,12 @@ allowed_origins = [
     for origin in os.getenv("ALLOWED_ORIGINS", "*").split(",")
     if origin.strip()
 ]
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    """Wake up the background scheduler when the API starts."""
+    ReminderScheduler.get_instance().ensure_running()
 
 app.add_middleware(
     CORSMiddleware,
@@ -661,6 +670,10 @@ def create_follow_up(
             user_name=body.user_name,
             message=body.message,
         )
+
+        # Trigger the background scheduler
+        ReminderScheduler.get_instance().ensure_running()
+
         return {"follow_up_id": fu_id, "created": True}
     finally:
         db.close()
@@ -689,34 +702,8 @@ def send_pending_follow_ups(
 
     Intended to be called by a cron job or a scheduled task.
     """
-    from common.email import send_follow_up_reminder
-
-    now_iso = datetime.now(timezone.utc).isoformat()
-    db = _db()
-    sent = 0
-    failed = 0
-    try:
-        pending = db.get_pending_follow_ups(now_iso)
-        for fu in pending:
-            action_text = fu.get("action_id", "")
-            if fu.get("action_id"):
-                actions = db.list_remediation_actions(fu["job_id"])
-                match = next((a for a in actions if a["id"] == fu["action_id"]), None)
-                action_text = match["action_text"] if match else "Remediation action"
-            ok = send_follow_up_reminder(
-                to_email=fu["user_email"],
-                to_name=fu.get("user_name"),
-                action_text=action_text or "Follow-up on your incident",
-                message=fu.get("message"),
-                remind_at=fu["remind_at"],
-            )
-            if ok:
-                db.mark_follow_up_sent(fu["id"])
-                sent += 1
-            else:
-                failed += 1
-    finally:
-        db.close()
+    scheduler = ReminderScheduler.get_instance()
+    sent, failed = scheduler.process_all_pending()
     return {"sent": sent, "failed": failed}
 
 

@@ -679,18 +679,37 @@ function ActionItem({ action, onStatusChange, onNotesSave, onDueDateChange, onCh
                 placeholder="Note why this was done, skipped, or what you found…"
                 value={noteDraft}
                 onChange={(e) => setNoteDraft(e.target.value)}
-                onBlur={handleNotesBlur}
                 style={{ fontSize: 12, resize: "vertical", flex: 1, marginTop: 0 }}
                 autoFocus
               />
-              <button
-                type="button"
-                onClick={() => { handleNotesBlur(); setNotesOpen(false); }}
-                className="btn btn-muted"
-                style={{ fontSize: 11, padding: "3px 8px", flexShrink: 0 }}
-              >
-                Save
-              </button>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <button
+                  type="button"
+                  onClick={() => { handleNotesBlur(); setNotesOpen(false); }}
+                  className="btn btn-muted"
+                  style={{ fontSize: 11, padding: "3px 8px", flexShrink: 0 }}
+                >
+                  Save
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNoteDraft(action.notes || "");
+                    setNotesOpen(false);
+                  }}
+                  className="btn btn-muted"
+                  style={{
+                    fontSize: 14,
+                    padding: "0 8px",
+                    flexShrink: 0,
+                    color: "var(--error, #dc2626)",
+                    fontWeight: "bold",
+                  }}
+                  title="Cancel"
+                >
+                  ×
+                </button>
+              </div>
             </div>
           )}
         </div>

@@ -55,7 +55,7 @@ export default function IncidentInput({ onAnalyze, loading, draft, onDraftChange
           className="input textarea"
           value={draft.text}
           onChange={(e) => onDraftChange({ text: e.target.value })}
-          placeholder="Paste logs, stack trace, and context here..."
+          placeholder={"2024-04-23T08:12:44Z ERROR database connection refused...\n2024-04-23T08:12:50Z CRITICAL panic: runtime error...\n\nPaste logs, stack trace, and context here..."}
           required
         />
       </label>

@@ -51,8 +51,8 @@ def main() -> None:
     if not backend_env.get("CLERK_JWKS_URL") and not backend_env.get("CLERK_ISSUER"):
         backend_env.setdefault("AUTH_DISABLED", "true")
 
-    backend = subprocess.Popen(backend_cmd, cwd=BACKEND_DIR, env=backend_env)
-    frontend = subprocess.Popen(frontend_cmd, cwd=FRONTEND_DIR, env=frontend_env)
+    backend = subprocess.Popen(backend_cmd, cwd=BACKEND_DIR, env=backend_env, shell=os.name == "nt")
+    frontend = subprocess.Popen(frontend_cmd, cwd=FRONTEND_DIR, env=frontend_env, shell=os.name == "nt")
 
     print("Sentinel local dev started:")
     print("- Backend:  http://localhost:8000")
