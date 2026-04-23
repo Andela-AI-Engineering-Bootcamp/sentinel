@@ -1,158 +1,129 @@
-import { RedirectToSignIn, SignedIn, SignedOut, useAuth, useUser } from "@clerk/nextjs";
-import { useState } from "react";
+import { SignedIn, SignedOut, SignInButton } from "@clerk/nextjs";
+import Link from "next/link";
 
-import AnalysisReport from "../components/AnalysisReport";
-import AppShell from "../components/AppShell";
-import IncidentInput from "../components/IncidentInput";
-import InvestigationStreamPanel from "../components/InvestigationStreamPanel";
-import RunTimeline from "../components/RunTimeline";
-import { useAnalyzeSession } from "../context/AnalyzeSessionContext";
-import { createIncident, pollJobUntilDone, streamJobUntilTerminal } from "../lib/api";
 import { isClerkEnabled } from "../lib/clerk";
 
 const clerkEnabled = isClerkEnabled();
 
-async function runIncidentAnalysis(payload, getToken, onLiveEvents) {
-  const token = clerkEnabled && getToken ? await getToken() : null;
-  const created = await createIncident(payload, token);
+const highlights = [
+  {
+    title: "Multi-agent analysis",
+    body: "Normalizer, summarizer, investigator, and remediator coordinate to produce grounded incident outcomes.",
+  },
+  {
+    title: "Operator-ready workflow",
+    body: "Track each run, review remediation actions, and export audit artifacts for post-incident reporting.",
+  },
+  {
+    title: "Built for secure teams",
+    body: "Clerk-backed identity, per-user run isolation, and Aurora-backed persistence for production workloads.",
+  },
+];
 
-  const collected = [];
-  let finalJob = null;
-  try {
-    finalJob = await streamJobUntilTerminal(created.job_id, token, {
-      onEvent: (p) => {
-        if (p.event) {
-          collected.push(p.event);
-          if (onLiveEvents) onLiveEvents([...collected]);
-        }
-        if (p.terminal && p.job) {
-          finalJob = p.job;
-        }
-      },
-    });
-  } catch {
-    /* fall back to polling */
-  }
-
-  if (!finalJob) {
-    finalJob = await pollJobUntilDone(created.job_id, token);
-  }
-
-  const events =
-    finalJob?.pipeline_events?.length >= collected.length ? finalJob.pipeline_events : collected.length ? collected : finalJob?.pipeline_events || [];
-
-  return { job: finalJob, events };
-}
-
-function HomeContent({ getToken = null, userProfile = null }) {
-  const [loading, setLoading] = useState(false);
-  const {
-    result,
-    setResult,
-    pipelineEvents,
-    setPipelineEvents,
-    error,
-    setError,
-    draft,
-    updateDraft,
-    clearAnalysis,
-  } = useAnalyzeSession();
-
-  async function onAnalyze(payload) {
-    setLoading(true);
-    setError("");
-    updateDraft({ title: payload.title, source: payload.source, text: payload.text });
-    setResult(null);
-    setPipelineEvents([]);
-    try {
-      const { job, events } = await runIncidentAnalysis(payload, getToken, (live) => setPipelineEvents(live));
-      setResult(job);
-      setPipelineEvents(events);
-    } catch (err) {
-      setError(err.message || "Failed to analyze incident");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const canClear = !!(draft.text.trim() || result || pipelineEvents.length || error);
-
-  return (
-    <AppShell activeHref="/">
-      <header className="page-header">
-        <div>
-          <p className="eyebrow">Incident intelligence</p>
-          <h1 className="page-title">Command center</h1>
-          <p className="page-sub muted">Submit logs, then follow the live pipeline. Charts and file export are on the Dashboard.</p>
-        </div>
-        <div className="page-header-actions">
-          {!clerkEnabled ? <p className="muted small">Local mode: auth disabled.</p> : null}
-        </div>
-      </header>
-
-      <div className="analyze-grid">
-        <div className="analyze-col analyze-col-input">
-          <IncidentInput
-            onAnalyze={onAnalyze}
-            loading={loading}
-            draft={draft}
-            onDraftChange={updateDraft}
-            onClear={() => clearAnalysis()}
-            canClear={canClear}
-          />
-          {error ? <p className="error compact">{error}</p> : null}
-        </div>
-        <div className="analyze-col analyze-col-run">
-          <RunTimeline job={result} pipelineEvents={pipelineEvents} running={loading} />
-        </div>
-      </div>
-
-      <p className="muted small" style={{ marginTop: 8 }}>
-        After a run finishes, open the{" "}
-        <a className="link-subtle" href="/dashboard">
-          Dashboard
-        </a>{" "}
-        for log charts and exports.
-      </p>
-
-      <AnalysisReport result={result} getToken={getToken} userProfile={userProfile} showExport={false} />
-
-      <InvestigationStreamPanel
-        job={result}
-        getToken={getToken}
-        disabled={loading || !result || result.status !== "completed"}
-      />
-    </AppShell>
-  );
-}
-
-function UnauthenticatedHome() {
-  return <HomeContent />;
-}
-
-function AuthenticatedHome() {
-  const { getToken } = useAuth();
-  const { user } = useUser();
-  const userProfile = user ? {
-    email: user.primaryEmailAddress?.emailAddress || "",
-    name: user.fullName || user.username || "",
-  } : null;
-  return <HomeContent getToken={getToken} userProfile={userProfile} />;
-}
-
-export default function Home() {
+function CtaButton() {
   if (!clerkEnabled) {
-    return <UnauthenticatedHome />;
+    return (
+      <Link href="/dashboard" className="landing-cta landing-cta-primary">
+        Go to dashboard
+      </Link>
+    );
   }
 
   return (
     <>
-      <SignedIn>
-        <AuthenticatedHome />
-      </SignedIn>
       <SignedOut>
-        <RedirectToSignIn />
+        <SignInButton mode="modal">
+          <button type="button" className="landing-cta landing-cta-primary">
+            Sign in
+          </button>
+        </SignInButton>
       </SignedOut>
+      <SignedIn>
+        <Link href="/dashboard" className="landing-cta landing-cta-primary">
+          Go to dashboard
+        </Link>
+      </SignedIn>
     </>
+  );
+}
+
+export default function LandingPage() {
+  return (
+    <main className="landing-page">
+      <div className="landing-glow landing-glow-left" aria-hidden />
+      <div className="landing-glow landing-glow-right" aria-hidden />
+      <div className="landing-grid" aria-hidden />
+
+      <header className="landing-header">
+        <Link href="/" className="landing-brand">
+          <span className="landing-brand-mark" aria-hidden>
+            <svg width="30" height="30" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path
+                d="M16 4L26 10V22L16 28L6 22V10L16 4Z"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                fill="none"
+              />
+              <circle cx="16" cy="16" r="3" fill="currentColor" />
+            </svg>
+          </span>
+          <span>
+            <strong>Odyssey Sentinel</strong>
+            <small>AI Incident Command</small>
+          </span>
+        </Link>
+
+        <div className="landing-header-actions">
+          <CtaButton />
+        </div>
+      </header>
+
+      <section className="landing-hero">
+        <p className="landing-kicker">Production Incident Intelligence</p>
+        <h1>
+          <span className="landing-title-line">Resolve high-impact incidents</span>
+          <span className="landing-title-line">with calm, speed, and reliable AI support.</span>
+        </h1>
+        <p className="landing-subhead">
+          Sentinel helps your team triage logs, identify root cause, and execute remediation with an auditable,
+          structured workflow from first signal to post-incident report.
+        </p>
+
+        <div className="landing-hero-actions">
+          <CtaButton />
+          <Link href="/analyze" className="landing-cta landing-cta-secondary">
+            Open analyze workspace
+          </Link>
+        </div>
+
+        <div className="landing-stat-row" aria-label="Platform highlights">
+          <article>
+            <strong>5</strong>
+            <span>Specialized agents</span>
+          </article>
+          <article>
+            <strong>Aurora</strong>
+            <span>Production-grade data layer</span>
+          </article>
+          <article>
+            <strong>Live</strong>
+            <span>Pipeline progress timeline</span>
+          </article>
+        </div>
+      </section>
+
+      <section className="landing-highlights" aria-label="Core capabilities">
+        {highlights.map((item) => (
+          <article key={item.title} className="landing-card">
+            <h2>{item.title}</h2>
+            <p>{item.body}</p>
+          </article>
+        ))}
+      </section>
+
+      <footer className="landing-footer">
+        <p>Designed for modern reliability teams handling complex, high-stakes operations.</p>
+      </footer>
+    </main>
   );
 }

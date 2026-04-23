@@ -6,7 +6,8 @@ import { isClerkEnabled } from "../lib/clerk";
 const clerkEnabled = isClerkEnabled();
 
 const nav = [
-  { href: "/", label: "Analyze" },
+  { href: "/", label: "Home" },
+  { href: "/analyze", label: "Analyze" },
   { href: "/dashboard", label: "Dashboard" },
   { href: "/audit", label: "Audit" },
   { href: "/settings", label: "Settings" },
@@ -23,7 +24,7 @@ function UserSection() {
   return (
     <div className="shell-user">
       <UserButton
-        afterSignOutUrl="/sign-in"
+        afterSignOutUrl="/"
         appearance={{
           elements: {
             avatarBox: { width: 32, height: 32 },

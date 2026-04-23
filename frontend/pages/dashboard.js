@@ -341,7 +341,7 @@ function DashboardContent({ tokenProvider = null }) {
       ) : !filterValue ? (
         <p className="muted small" style={{ marginBottom: 24 }}>
           Select a <strong>run</strong> above to load charts and the analysis. Start a new analysis on{" "}
-          <a className="link-subtle" href="/">
+          <a className="link-subtle" href="/analyze">
             Analyze
           </a>
           .

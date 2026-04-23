@@ -211,7 +211,7 @@ function AuditContent({ tokenProvider = null }) {
       {!selectedJobId && !loading ? (
         <p className="muted small" style={{ marginBottom: 24 }}>
           Pick a <strong>run</strong> or enter a <strong>job ID</strong> to load the audit trail. Create runs on{" "}
-          <a className="link-subtle" href="/">
+          <a className="link-subtle" href="/analyze">
             Analyze
           </a>{" "}
           or the{" "}
