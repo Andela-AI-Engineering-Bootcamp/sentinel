@@ -1,125 +1,313 @@
+# Part 8: Enterprise - CloudWatch Dashboards for Monitoring
+
 terraform {
-  required_version = ">= 1.5.0"
+  required_version = ">= 1.0"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
 }
 
 provider "aws" {
   region = var.aws_region
 }
 
-resource "aws_sns_topic" "alerts" {
-  name = "sentinel-alerts"
-}
+# Data sources
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
 
-resource "aws_sns_topic_subscription" "email" {
-  count     = var.alarm_email == "" ? 0 : 1
-  topic_arn = aws_sns_topic.alerts.arn
-  protocol  = "email"
-  endpoint  = var.alarm_email
-}
+locals {
+  name_prefix = "sentinel"
 
-resource "aws_cloudwatch_metric_alarm" "api_errors" {
-  alarm_name          = "sentinel-api-errors"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 1
-  metric_name         = "Errors"
-  namespace           = "AWS/Lambda"
-  period              = 300
-  statistic           = "Sum"
-  threshold           = 5
-  alarm_description   = "API Lambda errors > 5 in 5m"
-  alarm_actions       = [aws_sns_topic.alerts.arn]
-
-  dimensions = {
-    FunctionName = var.api_lambda_name
+  common_tags = {
+    Project   = "sentinel"
+    Part      = "8_enterprise"
+    ManagedBy = "terraform"
   }
 }
 
-resource "aws_cloudwatch_metric_alarm" "planner_errors" {
-  alarm_name          = "sentinel-planner-errors"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 1
-  metric_name         = "Errors"
-  namespace           = "AWS/Lambda"
-  period              = 300
-  statistic           = "Sum"
-  threshold           = 3
-  alarm_description   = "Planner Lambda errors > 3 in 5m"
-  alarm_actions       = [aws_sns_topic.alerts.arn]
+# ========================================
+# Bedrock & AI Model Usage Dashboard
+# ========================================
 
-  dimensions = {
-    FunctionName = var.planner_lambda_name
-  }
-}
-
-resource "aws_cloudwatch_metric_alarm" "queue_age" {
-  alarm_name          = "sentinel-queue-age"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 1
-  metric_name         = "ApproximateAgeOfOldestMessage"
-  namespace           = "AWS/SQS"
-  period              = 300
-  statistic           = "Maximum"
-  threshold           = 300
-  alarm_description   = "Oldest SQS message age over 5 minutes"
-  alarm_actions       = [aws_sns_topic.alerts.arn]
-
-  dimensions = {
-    QueueName = var.sqs_queue_name
-  }
-}
-
-resource "aws_cloudwatch_dashboard" "sentinel" {
-  dashboard_name = "sentinel-operations-dashboard"
+resource "aws_cloudwatch_dashboard" "ai_model_usage" {
+  dashboard_name = "${local.name_prefix}-ai-model-usage"
 
   dashboard_body = jsonencode({
     widgets = [
+      # Bedrock Model Invocations
       {
         type   = "metric"
-        x      = 0
-        y      = 0
         width  = 12
         height = 6
         properties = {
-          title   = "API Lambda Invocations & Errors"
-          region  = var.aws_region
           metrics = [
-            ["AWS/Lambda", "Invocations", "FunctionName", var.api_lambda_name],
-            ["AWS/Lambda", "Errors", "FunctionName", var.api_lambda_name]
+            ["AWS/Bedrock", "Invocations", "ModelId", var.bedrock_model_id, { stat = "Sum", label = "Model Invocations", id = "m1", color = "#1f77b4" }],
+            [".", "InvocationClientErrors", ".", ".", { stat = "Sum", label = "Client Errors", id = "m2", color = "#d62728" }],
+            [".", "InvocationServerErrors", ".", ".", { stat = "Sum", label = "Server Errors", id = "m3", color = "#ff7f0e" }]
           ]
-          stat = "Sum"
+          view    = "timeSeries"
+          stacked = false
+          region  = var.bedrock_region
+          title   = "Bedrock Model Invocations (${var.bedrock_model_id})"
+          period  = 300
+          stat    = "Sum"
+          yAxis = {
+            left = {
+              label     = "Count"
+              showUnits = false
+            }
+          }
         }
       },
+      # Bedrock Token Usage
       {
         type   = "metric"
-        x      = 12
-        y      = 0
         width  = 12
         height = 6
         properties = {
-          title   = "Planner Lambda Duration"
-          region  = var.aws_region
           metrics = [
-            ["AWS/Lambda", "Duration", "FunctionName", var.planner_lambda_name]
+            ["AWS/Bedrock", "InputTokenCount", "ModelId", var.bedrock_model_id, { stat = "Sum", label = "Input Tokens", id = "t1", color = "#2ca02c" }],
+            [".", "OutputTokenCount", ".", ".", { stat = "Sum", label = "Output Tokens", id = "t2", color = "#9467bd" }]
           ]
-          stat = "Average"
+          view    = "timeSeries"
+          stacked = true
+          region  = var.bedrock_region
+          title   = "Bedrock Token Usage (${var.bedrock_model_id})"
+          period  = 300
+          stat    = "Sum"
+          yAxis = {
+            left = {
+              label     = "Tokens"
+              showUnits = false
+            }
+          }
         }
       },
+      # Bedrock Latency
       {
         type   = "metric"
-        x      = 0
-        y      = 6
         width  = 12
         height = 6
         properties = {
-          title   = "SQS Queue Depth"
-          region  = var.aws_region
           metrics = [
-            ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", var.sqs_queue_name],
-            ["AWS/SQS", "ApproximateAgeOfOldestMessage", "QueueName", var.sqs_queue_name]
+            ["AWS/Bedrock", "InvocationLatency", "ModelId", var.bedrock_model_id, { stat = "Average", label = "Average Latency", id = "l1", color = "#1f77b4" }],
+            [".", ".", ".", ".", { stat = "Maximum", label = "Max Latency", id = "l2", color = "#d62728" }],
+            [".", ".", ".", ".", { stat = "Minimum", label = "Min Latency", id = "l3", color = "#2ca02c" }]
           ]
-          stat = "Maximum"
+          view    = "timeSeries"
+          stacked = false
+          region  = var.bedrock_region
+          title   = "Bedrock Response Latency (${var.bedrock_model_id})"
+          period  = 300
+          yAxis = {
+            left = {
+              label     = "Latency (ms)"
+              showUnits = false
+            }
+          }
+        }
+      },
+      # SageMaker Endpoint Invocations
+      {
+        type   = "metric"
+        width  = 12
+        height = 6
+        properties = {
+          metrics = [
+            [{ expression = "SEARCH(' {AWS/SageMaker,EndpointName,VariantName} MetricName=\"Invocations\" EndpointName=\"sentinel-embedding-endpoint\" ', 'Sum')", id = "s1", label = "Invocations", color = "#1f77b4" }],
+            [{ expression = "SEARCH(' {AWS/SageMaker,EndpointName,VariantName} MetricName=\"Invocation4XXErrors\" EndpointName=\"sentinel-embedding-endpoint\" ', 'Sum')", id = "s2", label = "4XX Errors", color = "#ff7f0e" }],
+            [{ expression = "SEARCH(' {AWS/SageMaker,EndpointName,VariantName} MetricName=\"Invocation5XXErrors\" EndpointName=\"sentinel-embedding-endpoint\" ', 'Sum')", id = "s3", label = "5XX Errors", color = "#d62728" }]
+          ]
+          view    = "timeSeries"
+          stacked = false
+          region  = var.aws_region
+          title   = "SageMaker Embedding Endpoint Invocations"
+          period  = 300
+          yAxis = {
+            left = {
+              label     = "Count"
+              showUnits = false
+            }
+          }
+        }
+      },
+      # SageMaker Model Latency
+      {
+        type   = "metric"
+        width  = 12
+        height = 6
+        properties = {
+          metrics = [
+            [{ expression = "SEARCH(' {AWS/SageMaker,EndpointName,VariantName} MetricName=\"ModelLatency\" EndpointName=\"sentinel-embedding-endpoint\" ', 'Average')", id = "ml1", label = "Average Latency", color = "#2ca02c" }],
+            [{ expression = "SEARCH(' {AWS/SageMaker,EndpointName,VariantName} MetricName=\"ModelLatency\" EndpointName=\"sentinel-embedding-endpoint\" ', 'Maximum')", id = "ml2", label = "Max Latency", color = "#d62728" }],
+            [{ expression = "SEARCH(' {AWS/SageMaker,EndpointName,VariantName} MetricName=\"ModelLatency\" EndpointName=\"sentinel-embedding-endpoint\" ', 'Minimum')", id = "ml3", label = "Min Latency", color = "#1f77b4" }]
+          ]
+          view    = "timeSeries"
+          stacked = false
+          region  = var.aws_region
+          title   = "SageMaker Model Latency"
+          period  = 300
+          yAxis = {
+            left = {
+              label     = "Latency (μs)"
+              showUnits = false
+            }
+          }
         }
       }
     ]
   })
+
+}
+
+# ========================================
+# Agent Performance Dashboard
+# ========================================
+
+resource "aws_cloudwatch_dashboard" "agent_performance" {
+  dashboard_name = "${local.name_prefix}-agent-performance"
+
+  dashboard_body = jsonencode({
+    widgets = [
+      # Agent Execution Times
+      {
+        type   = "metric"
+        width  = 12
+        height = 6
+        properties = {
+          metrics = [
+            ["AWS/Lambda", "Duration", "FunctionName", "sentinel-planner", { stat = "Average", label = "Planner", id = "m1", color = "#1f77b4" }],
+            [".", ".", ".", "sentinel-normalizer", { stat = "Average", label = "Normalizer", id = "m2", color = "#2ca02c" }],
+            [".", ".", ".", "sentinel-summarizer", { stat = "Average", label = "Summarizer", id = "m3", color = "#ff7f0e" }],
+            [".", ".", ".", "sentinel-investigator", { stat = "Average", label = "Investigator", id = "m4", color = "#d62728" }],
+            [".", ".", ".", "sentinel-remediator", { stat = "Average", label = "Remediator", id = "m5", color = "#9467bd" }]
+          ]
+          view    = "timeSeries"
+          stacked = false
+          region  = var.aws_region
+          title   = "Agent Execution Times"
+          period  = 300
+          stat    = "Average"
+          yAxis = {
+            left = {
+              label     = "Duration (ms)"
+              showUnits = false
+            }
+          }
+        }
+      },
+      # Agent Error Rates
+      {
+        type   = "metric"
+        width  = 12
+        height = 6
+        properties = {
+          metrics = [
+            ["AWS/Lambda", "Errors", "FunctionName", "sentinel-planner", { stat = "Sum", label = "Planner Errors", id = "e1", color = "#1f77b4" }],
+            [".", ".", ".", "sentinel-normalizer", { stat = "Sum", label = "Normalizer Errors", id = "e2", color = "#2ca02c" }],
+            [".", ".", ".", "sentinel-summarizer", { stat = "Sum", label = "Summarizer Errors", id = "e3", color = "#ff7f0e" }],
+            [".", ".", ".", "sentinel-investigator", { stat = "Sum", label = "Investigator Errors", id = "e4", color = "#d62728" }],
+            [".", ".", ".", "sentinel-remediator", { stat = "Sum", label = "Remediator Errors", id = "e5", color = "#9467bd" }]
+          ]
+          view    = "timeSeries"
+          stacked = false
+          region  = var.aws_region
+          title   = "Agent Error Rates"
+          period  = 300
+          stat    = "Sum"
+          yAxis = {
+            left = {
+              label     = "Error Count"
+              showUnits = false
+            }
+          }
+        }
+      },
+      # Agent Invocations
+      {
+        type   = "metric"
+        width  = 12
+        height = 6
+        properties = {
+          metrics = [
+            ["AWS/Lambda", "Invocations", "FunctionName", "sentinel-planner", { stat = "Sum", label = "Planner", id = "i1", color = "#1f77b4" }],
+            [".", ".", ".", "sentinel-normalizer", { stat = "Sum", label = "Normalizer", id = "i2", color = "#2ca02c" }],
+            [".", ".", ".", "sentinel-summarizer", { stat = "Sum", label = "Summarizer", id = "i3", color = "#ff7f0e" }],
+            [".", ".", ".", "sentinel-investigator", { stat = "Sum", label = "Investigator", id = "i4", color = "#d62728" }],
+            [".", ".", ".", "sentinel-remediator", { stat = "Sum", label = "Remediator", id = "i5", color = "#9467bd" }]
+          ]
+          view    = "timeSeries"
+          stacked = false
+          region  = var.aws_region
+          title   = "Agent Invocation Counts"
+          period  = 300
+          stat    = "Sum"
+          yAxis = {
+            left = {
+              label     = "Invocation Count"
+              showUnits = false
+            }
+          }
+        }
+      },
+      # Concurrent Executions
+      {
+        type   = "metric"
+        width  = 12
+        height = 6
+        properties = {
+          metrics = [
+            ["AWS/Lambda", "ConcurrentExecutions", "FunctionName", "sentinel-planner", { stat = "Maximum", label = "Planner", id = "c1", color = "#1f77b4" }],
+            [".", ".", ".", "sentinel-normalizer", { stat = "Maximum", label = "Normalizer", id = "c2", color = "#2ca02c" }],
+            [".", ".", ".", "sentinel-summarizer", { stat = "Maximum", label = "Summarizer", id = "c3", color = "#ff7f0e" }],
+            [".", ".", ".", "sentinel-investigator", { stat = "Maximum", label = "Investigator", id = "c4", color = "#d62728" }],
+            [".", ".", ".", "sentinel-remediator", { stat = "Maximum", label = "Remediator", id = "c5", color = "#9467bd" }]
+          ]
+          view    = "timeSeries"
+          stacked = false
+          region  = var.aws_region
+          title   = "Concurrent Executions"
+          period  = 300
+          stat    = "Maximum"
+          yAxis = {
+            left = {
+              label     = "Concurrent Executions"
+              showUnits = false
+            }
+          }
+        }
+      },
+      # Throttles
+      {
+        type   = "metric"
+        width  = 12
+        height = 6
+        properties = {
+          metrics = [
+            ["AWS/Lambda", "Throttles", "FunctionName", "sentinel-planner", { stat = "Sum", label = "Planner Throttles", id = "t1", color = "#1f77b4" }],
+            [".", ".", ".", "sentinel-normalizer", { stat = "Sum", label = "Normalizer Throttles", id = "t2", color = "#2ca02c" }],
+            [".", ".", ".", "sentinel-summarizer", { stat = "Sum", label = "Summarizer Throttles", id = "t3", color = "#ff7f0e" }],
+            [".", ".", ".", "sentinel-investigator", { stat = "Sum", label = "Investigator Throttles", id = "t4", color = "#d62728" }],
+            [".", ".", ".", "sentinel-remediator", { stat = "Sum", label = "Remediator Throttles", id = "t5", color = "#9467bd" }]
+          ]
+          view    = "timeSeries"
+          stacked = false
+          region  = var.aws_region
+          title   = "Agent Throttles"
+          period  = 300
+          stat    = "Sum"
+          yAxis = {
+            left = {
+              label     = "Throttle Count"
+              showUnits = false
+            }
+          }
+        }
+      }
+    ]
+  })
+
 }
