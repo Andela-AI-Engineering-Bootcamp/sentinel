@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Any
 
 import jwt
 from fastapi import Depends, HTTPException, status
@@ -35,6 +36,17 @@ def auth_disabled() -> bool:
     """Return whether auth is explicitly disabled for local development/tests."""
 
     return _truthy(os.getenv("AUTH_DISABLED", "false"))
+
+
+def default_entitlements() -> dict[str, Any]:
+    """Return the baseline feature set for users without a paid plan."""
+
+    return {
+        "subscription_tier": "free",
+        "features": {
+            "live_incident_board": False,
+        },
+    }
 
 
 def _clerk_jwks_url() -> str:
@@ -99,3 +111,35 @@ def require_auth(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
     return AuthContext(user_id=claims["sub"], email=claims.get("email_address"), claims=claims)
+
+
+def get_user_entitlements(user: AuthContext) -> dict[str, Any]:
+    """Load product entitlements for the authenticated user."""
+
+    try:
+        from common.config import get_db_path
+        from common.store import Database
+
+        db = Database(get_db_path())
+        try:
+            return db.get_user_entitlements(user.user_id)
+        finally:
+            db.close()
+    except Exception:
+        return default_entitlements()
+
+
+def require_feature(feature_name: str):
+    """FastAPI dependency that enforces a specific product entitlement."""
+
+    def dependency(user: AuthContext = Depends(require_auth)) -> AuthContext:
+        entitlements = get_user_entitlements(user)
+        enabled = bool(entitlements.get("features", {}).get(feature_name))
+        if not enabled:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Feature '{feature_name}' is not enabled for this account.",
+            )
+        return user
+
+    return dependency

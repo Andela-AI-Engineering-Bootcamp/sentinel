@@ -178,6 +178,25 @@ export async function fetchCurrentUser(token) {
   return request("/api/me", { token });
 }
 
+export async function fetchLiveBoard(token) {
+  return request("/api/live/board", { token });
+}
+
+export async function updateLiveConfig(payload, token) {
+  return request("/api/live/config", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+    token,
+  });
+}
+
+export async function refreshLiveBoard(token) {
+  return request("/api/live/refresh", {
+    method: "POST",
+    token,
+  });
+}
+
 /**
  * Download GET /api/jobs/{id}/export?format=json|pdf as a file.
  * Pass a pre-fetched `token` when possible (e.g. from a hook) so the save dialog still opens after async work

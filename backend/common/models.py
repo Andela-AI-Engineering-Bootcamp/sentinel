@@ -253,3 +253,12 @@ class IncidentResolveRequest(BaseModel):
 
     resolution_notes: str | None = None
     status: Literal["open", "in_progress", "resolved"] = "resolved"
+
+
+class LiveMonitorConfigUpdate(BaseModel):
+    """Per-user CloudWatch monitoring settings for Live Incident Board."""
+
+    enabled: bool = True
+    log_groups: list[str] = Field(default_factory=list, max_length=50)
+    lookback_minutes: int = Field(default=5, ge=1, le=60)
+    error_threshold: int = Field(default=5, ge=1, le=100)
