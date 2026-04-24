@@ -306,9 +306,6 @@ Infrastructure is organized as **independent Terraform stages** under [terraform
 **Auth:** Clerk (JWT) · optional `AUTH_DISABLED` for local development  
 
 **Tooling:** uv · npm · pytest  
-
-For agent naming and model conventions, see [AGENTS.md](AGENTS.md).
-
 ---
 
 ## Version
