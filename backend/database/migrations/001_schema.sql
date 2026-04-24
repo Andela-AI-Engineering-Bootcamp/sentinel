@@ -17,6 +17,38 @@ CREATE TABLE IF NOT EXISTS user_entitlements (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS live_monitor_configs (
+  id TEXT PRIMARY KEY,
+  clerk_user_id TEXT NOT NULL UNIQUE REFERENCES users(clerk_user_id) ON DELETE CASCADE,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  log_groups_json TEXT NOT NULL DEFAULT '[]',
+  lookback_minutes INTEGER NOT NULL DEFAULT 5,
+  error_threshold INTEGER NOT NULL DEFAULT 5,
+  last_polled_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS live_incidents (
+  id TEXT PRIMARY KEY,
+  clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id) ON DELETE CASCADE,
+  fingerprint TEXT NOT NULL,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  severity TEXT NOT NULL DEFAULT 'medium',
+  source_log_groups_json TEXT NOT NULL DEFAULT '[]',
+  evidence_json TEXT NOT NULL DEFAULT '[]',
+  event_count INTEGER NOT NULL DEFAULT 0,
+  incident_id TEXT REFERENCES incidents(id) ON DELETE SET NULL,
+  latest_job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  last_analysis_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (clerk_user_id, fingerprint)
+);
+
 CREATE TABLE IF NOT EXISTS incidents (
   id TEXT PRIMARY KEY,
   clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id),
@@ -108,6 +140,12 @@ CREATE INDEX IF NOT EXISTS idx_jobs_clerk_created
 
 CREATE INDEX IF NOT EXISTS idx_user_entitlements_clerk
   ON user_entitlements(clerk_user_id);
+
+CREATE INDEX IF NOT EXISTS idx_live_monitor_configs_clerk
+  ON live_monitor_configs(clerk_user_id);
+
+CREATE INDEX IF NOT EXISTS idx_live_incidents_clerk_seen
+  ON live_incidents(clerk_user_id, last_seen_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_remediation_job_created
   ON remediation_actions(job_id, created_at);

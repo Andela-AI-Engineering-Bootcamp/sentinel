@@ -281,6 +281,26 @@ class Database:
         )
         return incident_id
 
+    def update_incident_raw_text(
+        self,
+        incident_id: str,
+        raw_text: str,
+        *,
+        title: str | None = None,
+    ) -> None:
+        self._execute(
+            """
+            UPDATE incidents
+            SET raw_text=:raw_text, title=COALESCE(:title, title)
+            WHERE id=:incident_id
+            """,
+            {
+                "incident_id": incident_id,
+                "raw_text": raw_text,
+                "title": title,
+            },
+        )
+
     def update_incident_sanitization(
         self, incident_id: str, sanitized_text: str, guardrail_json: dict
     ) -> None:
@@ -534,6 +554,243 @@ class Database:
                 },
             )
         return updated > 0
+
+    def get_live_monitor_config(self, clerk_user_id: str) -> dict[str, Any]:
+        uid = clerk_user_id or "anonymous"
+        row = self._query_one(
+            """
+            SELECT enabled, log_groups_json, lookback_minutes, error_threshold, last_polled_at
+            FROM live_monitor_configs
+            WHERE clerk_user_id=:clerk_user_id
+            """,
+            {"clerk_user_id": uid},
+        )
+        log_groups: list[str] = []
+        raw = (row or {}).get("log_groups_json")
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    log_groups = [str(item).strip() for item in parsed if str(item).strip()]
+            except json.JSONDecodeError:
+                log_groups = []
+        return {
+            "enabled": True if row is None else bool(row.get("enabled")),
+            "log_groups": log_groups,
+            "lookback_minutes": int((row or {}).get("lookback_minutes") or 5),
+            "error_threshold": int((row or {}).get("error_threshold") or 5),
+            "last_polled_at": (row or {}).get("last_polled_at"),
+        }
+
+    def upsert_live_monitor_config(
+        self,
+        clerk_user_id: str,
+        *,
+        enabled: bool = True,
+        log_groups: list[str] | None = None,
+        lookback_minutes: int = 5,
+        error_threshold: int = 5,
+    ) -> dict[str, Any]:
+        uid = clerk_user_id or "anonymous"
+        now = self._now_iso()
+        self._ensure_user(uid)
+        cleaned_groups = [str(item).strip() for item in (log_groups or []) if str(item).strip()]
+        self._execute(
+            """
+            INSERT INTO live_monitor_configs (
+              id, clerk_user_id, enabled, log_groups_json, lookback_minutes,
+              error_threshold, created_at, updated_at
+            )
+            VALUES (
+              :id, :clerk_user_id, :enabled, :log_groups_json, :lookback_minutes,
+              :error_threshold, :created_at, :updated_at
+            )
+            ON CONFLICT (clerk_user_id)
+            DO UPDATE
+              SET enabled = EXCLUDED.enabled,
+                  log_groups_json = EXCLUDED.log_groups_json,
+                  lookback_minutes = EXCLUDED.lookback_minutes,
+                  error_threshold = EXCLUDED.error_threshold,
+                  updated_at = EXCLUDED.updated_at
+            """,
+            {
+                "id": str(uuid.uuid4()),
+                "clerk_user_id": uid,
+                "enabled": enabled,
+                "log_groups_json": json.dumps(cleaned_groups),
+                "lookback_minutes": lookback_minutes,
+                "error_threshold": error_threshold,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+        return self.get_live_monitor_config(uid)
+
+    def touch_live_monitor_poll(self, clerk_user_id: str, *, polled_at: str | None = None) -> None:
+        uid = clerk_user_id or "anonymous"
+        stamp = polled_at or self._now_iso()
+        self._ensure_user(uid)
+        self._execute(
+            """
+            INSERT INTO live_monitor_configs (
+              id, clerk_user_id, last_polled_at, created_at, updated_at
+            )
+            VALUES (
+              :id, :clerk_user_id, :last_polled_at, :created_at, :updated_at
+            )
+            ON CONFLICT (clerk_user_id)
+            DO UPDATE
+              SET last_polled_at = EXCLUDED.last_polled_at,
+                  updated_at = EXCLUDED.updated_at
+            """,
+            {
+                "id": str(uuid.uuid4()),
+                "clerk_user_id": uid,
+                "last_polled_at": stamp,
+                "created_at": stamp,
+                "updated_at": stamp,
+            },
+        )
+
+    def get_live_incident(self, live_incident_id: str, clerk_user_id: str) -> dict[str, Any] | None:
+        return self._query_one(
+            "SELECT * FROM live_incidents WHERE id=:id AND clerk_user_id=:clerk_user_id",
+            {"id": live_incident_id, "clerk_user_id": clerk_user_id or "anonymous"},
+        )
+
+    def get_live_incident_by_fingerprint(self, clerk_user_id: str, fingerprint: str) -> dict[str, Any] | None:
+        return self._query_one(
+            """
+            SELECT * FROM live_incidents
+            WHERE clerk_user_id=:clerk_user_id AND fingerprint=:fingerprint
+            """,
+            {
+                "clerk_user_id": clerk_user_id or "anonymous",
+                "fingerprint": fingerprint,
+            },
+        )
+
+    def create_live_incident(
+        self,
+        clerk_user_id: str,
+        *,
+        fingerprint: str,
+        title: str,
+        severity: str,
+        source_log_groups: list[str],
+        evidence: list[dict[str, Any]],
+        event_count: int,
+        incident_id: str | None = None,
+        latest_job_id: str | None = None,
+        first_seen_at: str | None = None,
+        last_seen_at: str | None = None,
+        last_analysis_at: str | None = None,
+    ) -> str:
+        uid = clerk_user_id or "anonymous"
+        now = self._now_iso()
+        first_seen = first_seen_at or now
+        last_seen = last_seen_at or now
+        live_incident_id = str(uuid.uuid4())
+        self._ensure_user(uid)
+        self._execute(
+            """
+            INSERT INTO live_incidents (
+              id, clerk_user_id, fingerprint, title, status, severity,
+              source_log_groups_json, evidence_json, event_count, incident_id,
+              latest_job_id, first_seen_at, last_seen_at, last_analysis_at,
+              created_at, updated_at
+            )
+            VALUES (
+              :id, :clerk_user_id, :fingerprint, :title, 'open', :severity,
+              :source_log_groups_json, :evidence_json, :event_count, :incident_id,
+              :latest_job_id, :first_seen_at, :last_seen_at, :last_analysis_at,
+              :created_at, :updated_at
+            )
+            """,
+            {
+                "id": live_incident_id,
+                "clerk_user_id": uid,
+                "fingerprint": fingerprint,
+                "title": title,
+                "severity": severity,
+                "source_log_groups_json": json.dumps(source_log_groups),
+                "evidence_json": json.dumps(evidence),
+                "event_count": event_count,
+                "incident_id": incident_id,
+                "latest_job_id": latest_job_id,
+                "first_seen_at": first_seen,
+                "last_seen_at": last_seen,
+                "last_analysis_at": last_analysis_at,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+        return live_incident_id
+
+    def update_live_incident(
+        self,
+        live_incident_id: str,
+        *,
+        title: str | None = None,
+        status: str | None = None,
+        severity: str | None = None,
+        source_log_groups: list[str] | None = None,
+        evidence: list[dict[str, Any]] | None = None,
+        event_count: int | None = None,
+        incident_id: str | None = None,
+        latest_job_id: str | None = None,
+        last_seen_at: str | None = None,
+        last_analysis_at: str | None = None,
+    ) -> None:
+        current = self._query_one("SELECT * FROM live_incidents WHERE id=:id", {"id": live_incident_id}) or {}
+        self._execute(
+            """
+            UPDATE live_incidents
+            SET title=:title,
+                status=:status,
+                severity=:severity,
+                source_log_groups_json=:source_log_groups_json,
+                evidence_json=:evidence_json,
+                event_count=:event_count,
+                incident_id=:incident_id,
+                latest_job_id=:latest_job_id,
+                last_seen_at=:last_seen_at,
+                last_analysis_at=:last_analysis_at,
+                updated_at=:updated_at
+            WHERE id=:id
+            """,
+            {
+                "id": live_incident_id,
+                "title": title or current.get("title"),
+                "status": status or current.get("status") or "open",
+                "severity": severity or current.get("severity") or "medium",
+                "source_log_groups_json": json.dumps(
+                    source_log_groups
+                    if source_log_groups is not None
+                    else json.loads(current.get("source_log_groups_json") or "[]")
+                ),
+                "evidence_json": json.dumps(
+                    evidence if evidence is not None else json.loads(current.get("evidence_json") or "[]")
+                ),
+                "event_count": event_count if event_count is not None else int(current.get("event_count") or 0),
+                "incident_id": incident_id if incident_id is not None else current.get("incident_id"),
+                "latest_job_id": latest_job_id if latest_job_id is not None else current.get("latest_job_id"),
+                "last_seen_at": last_seen_at or current.get("last_seen_at") or self._now_iso(),
+                "last_analysis_at": last_analysis_at if last_analysis_at is not None else current.get("last_analysis_at"),
+                "updated_at": self._now_iso(),
+            },
+        )
+
+    def list_live_incidents(self, clerk_user_id: str, limit: int = 25) -> list[dict[str, Any]]:
+        return self._query(
+            """
+            SELECT * FROM live_incidents
+            WHERE clerk_user_id=:clerk_user_id
+            ORDER BY last_seen_at DESC
+            LIMIT :limit
+            """,
+            {"clerk_user_id": clerk_user_id or "anonymous", "limit": limit},
+        )
 
     def update_incident_assign(
         self,

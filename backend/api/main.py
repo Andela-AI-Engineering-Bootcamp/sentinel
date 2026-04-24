@@ -19,8 +19,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel as _Base
 
-from api.auth import AuthContext, get_user_entitlements, require_auth
+from api.auth import AuthContext, get_user_entitlements, require_auth, require_feature
 from common.config import get_db_path
+from common.liveops import list_live_board_data, refresh_live_board
 from common.log_stats import compute_log_stats
 from common.models import (
     ActionChatRequest,
@@ -36,6 +37,7 @@ from common.models import (
     IntegrationCreate,
     InvestigationStreamInput,
     JobCreateResponse,
+    LiveMonitorConfigUpdate,
     NormalizedIncident,
     RemediationFollowUpRequest,
 )
@@ -298,6 +300,51 @@ def me(user: AuthContext = Depends(require_auth)) -> dict[str, Any]:
         "subscription_tier": entitlements.get("subscription_tier", "free"),
         "features": entitlements.get("features", {}),
     }
+
+
+@app.get("/api/live/board")
+def get_live_board(
+    user: AuthContext = Depends(require_feature("live_incident_board")),
+) -> dict[str, Any]:
+    db = _db()
+    try:
+        return {
+            "config": db.get_live_monitor_config(user.user_id),
+            "incidents": list_live_board_data(user.user_id, db),
+            "warnings": [],
+        }
+    finally:
+        db.close()
+
+
+@app.put("/api/live/config")
+def update_live_config(
+    body: LiveMonitorConfigUpdate,
+    user: AuthContext = Depends(require_feature("live_incident_board")),
+) -> dict[str, Any]:
+    db = _db()
+    try:
+        config = db.upsert_live_monitor_config(
+            user.user_id,
+            enabled=body.enabled,
+            log_groups=body.log_groups,
+            lookback_minutes=body.lookback_minutes,
+            error_threshold=body.error_threshold,
+        )
+        return {"config": config}
+    finally:
+        db.close()
+
+
+@app.post("/api/live/refresh")
+def refresh_live_board_endpoint(
+    user: AuthContext = Depends(require_feature("live_incident_board")),
+) -> dict[str, Any]:
+    db = _db()
+    try:
+        return refresh_live_board(user.user_id, db)
+    finally:
+        db.close()
 
 
 @app.get("/api/team/members")

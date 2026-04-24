@@ -16,6 +16,8 @@ DROP_STATEMENTS = [
     "DROP TABLE IF EXISTS chat_messages",
     "DROP TABLE IF EXISTS follow_ups",
     "DROP TABLE IF EXISTS remediation_actions",
+    "DROP TABLE IF EXISTS live_incidents",
+    "DROP TABLE IF EXISTS live_monitor_configs",
     "DROP TABLE IF EXISTS integrations",
     "DROP TABLE IF EXISTS user_entitlements",
     "DROP TABLE IF EXISTS jobs",
