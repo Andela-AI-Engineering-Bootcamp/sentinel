@@ -196,7 +196,6 @@ resource "aws_lambda_function" "api" {
       OPENROUTER_MODEL = var.openrouter_model     
       OPENROUTER_BASE_URL = var.openrouter_base_url 
 
-
       RESEND_API_KEY = var.resend_api_key
       RESEND_FROM = var.resend_from
       REMINDER_INTERVAL_SECONDS = var.reminder_interval_seconds
