@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 
-from common.config import model_remediation, model_root_cause, model_support
+from common.config import active_model
 from common.models import IncidentAnalysis, IncidentInput, JobRunResponse
 from common.similarity import find_similar_incidents
 from common.store import Database, get_database
@@ -91,11 +91,7 @@ def run_job(
             root_cause=root_cause,
             remediation=remediation,
             guardrails=normalized.guardrails,
-            models={
-                "support": model_support(),
-                "root_cause": model_root_cause(),
-                "remediation": model_remediation(),
-            },
+            models={"model": active_model()},
         )
 
         db.save_analysis(job_id, analysis)

@@ -11,6 +11,7 @@ import boto3
 import httpx
 
 from common.config import (
+    active_model,
     bedrock_region,
     openrouter_api_key,
     openrouter_base_url,
@@ -229,14 +230,15 @@ def _converse_stream_chat_bedrock(
 
 
 def converse_json(
-    model_id: str, system_prompt: str, user_prompt: str, max_tokens: int = 1500
+    system_prompt: str, user_prompt: str, max_tokens: int = 1500
 ) -> dict[str, Any] | None:
     """Best-effort LLM call that expects JSON output.
 
-    Routes to OpenRouter when ``OPENROUTER_API_KEY`` is set, otherwise
-    falls back to AWS Bedrock when ``ENABLE_BEDROCK=true``.
-    Returns ``None`` when neither is configured or if invocation fails.
+    Routes to the active backend (USE_OPEN_ROUTER or USE_BEDROCK) and uses
+    the model returned by ``active_model()``. Returns ``None`` when neither
+    backend is configured or if the call fails.
     """
+    model_id = active_model()
     if use_openrouter():
         return _converse_json_openrouter(system_prompt, user_prompt, max_tokens=max_tokens)
     if use_bedrock():
@@ -245,9 +247,10 @@ def converse_json(
 
 
 def converse_stream_text(
-    model_id: str, system_prompt: str, user_prompt: str
+    system_prompt: str, user_prompt: str
 ) -> Iterator[str]:
     """Stream plain-text fragments from the configured LLM (best-effort)."""
+    model_id = active_model()
     if use_openrouter():
         yield from _converse_stream_text_openrouter(system_prompt, user_prompt)
         return
@@ -258,12 +261,15 @@ def converse_stream_text(
 
 
 def converse_stream_chat(
-    model_id: str, system_prompt: str, messages: list[dict[str, str]]
+    system_prompt: str, messages: list[dict[str, str]]
 ) -> Iterator[str]:
     """Stream plain-text from the LLM given a full multi-turn message history.
 
     ``messages`` is a list of ``{"role": "user"|"assistant", "content": str}`` dicts.
+    The model is resolved from ``active_model()`` — set via OPENROUTER_MODEL or
+    BEDROCK_MODEL_ID depending on which backend is enabled.
     """
+    model_id = active_model()
     if use_openrouter():
         yield from _converse_stream_chat_openrouter(system_prompt, messages)
         return

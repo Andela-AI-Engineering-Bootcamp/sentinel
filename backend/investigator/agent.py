@@ -6,7 +6,6 @@ import json
 from collections.abc import Iterator
 
 from common.bedrock import converse_json, converse_stream_text
-from common.config import model_root_cause
 from common.guardrails import enforce_grounding
 from common.heuristics import infer_root_cause
 from common.models import IncidentSummary, NormalizedIncident, RemediationPlan, RootCauseAnalysis
@@ -26,7 +25,7 @@ def investigate_root_cause(normalized: NormalizedIncident, summary: IncidentSumm
     """Identify likely root cause with grounded evidence."""
 
     prompt = _investigator_prompt(normalized, summary)
-    result = converse_json(model_root_cause(), INVESTIGATOR_INSTRUCTIONS, prompt)
+    result = converse_json(INVESTIGATOR_INSTRUCTIONS, prompt)
 
     if result:
         try:
@@ -53,7 +52,7 @@ def stream_investigation_text(normalized: NormalizedIncident, summary: IncidentS
     """Yield streamed model text (JSON) or chunked heuristic JSON for the UI."""
 
     prompt = _investigator_prompt(normalized, summary)
-    stream = converse_stream_text(model_root_cause(), INVESTIGATOR_INSTRUCTIONS, prompt)
+    stream = converse_stream_text(INVESTIGATOR_INSTRUCTIONS, prompt)
     had_chunk = False
     for chunk in stream:
         had_chunk = True

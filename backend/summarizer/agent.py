@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from common.bedrock import converse_json
-from common.config import model_support
 from common.heuristics import summarize_incident as heuristic_summarize
 from common.models import IncidentSummary, NormalizedIncident
 
@@ -22,7 +21,7 @@ def summarize_incident(normalized: NormalizedIncident) -> IncidentSummary:
         f"Evidence snippets: {normalized.evidence_snippets}\n"
         f"Log text:\n{normalized.normalized_text[:6000]}"
     )
-    result = converse_json(model_support(), _SUMMARIZER_INSTRUCTIONS, prompt)
+    result = converse_json(_SUMMARIZER_INSTRUCTIONS, prompt)
 
     if result:
         try:

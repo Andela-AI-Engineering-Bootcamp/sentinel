@@ -72,18 +72,6 @@ def clerk_secret_key() -> str:
     return os.getenv("CLERK_SECRET_KEY", "")
 
 
-def model_support() -> str:
-    return os.getenv("BEDROCK_MODEL_SUPPORT", "openai.gpt-oss-120b-1:0")
-
-
-def model_root_cause() -> str:
-    return os.getenv("BEDROCK_MODEL_ROOT_CAUSE", "eu.amazon.nova-pro-v1:0")
-
-
-def model_remediation() -> str:
-    return os.getenv("BEDROCK_MODEL_REMEDIATION", "eu.amazon.nova-pro-v1:0")
-
-
 def use_openrouter() -> bool:
     return os.getenv("USE_OPEN_ROUTER", "false").lower() == "true"
 
@@ -98,6 +86,17 @@ def openrouter_model() -> str:
 
 def openrouter_base_url() -> str:
     return os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+
+
+def active_model() -> str:
+    """Return the model identifier for whichever LLM backend is active.
+
+    - USE_OPEN_ROUTER=true  → OPENROUTER_MODEL (default: openai/gpt-4o-mini)
+    - USE_BEDROCK=true      → BEDROCK_MODEL_ID  (default: eu.amazon.nova-pro-v1:0)
+    """
+    if use_openrouter():
+        return openrouter_model()
+    return os.getenv("BEDROCK_MODEL_ID", "eu.amazon.nova-pro-v1:0")
 
 
 def reminder_interval_seconds() -> int:

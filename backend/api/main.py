@@ -768,7 +768,6 @@ def stream_action_chat(
 ) -> StreamingResponse:
     """Stream an LLM conversation scoped to a single remediation action and persist both turns."""
     from common.bedrock import converse_stream_chat
-    from common.config import model_root_cause
     from common.guardrails import sanitize_chat_message
 
     db = _db()
@@ -835,9 +834,7 @@ def stream_action_chat(
     def gen() -> Any:
         parts: list[str] = []
         try:
-            for chunk in converse_stream_chat(
-                model_root_cause(), system_prompt, messages
-            ):
+            for chunk in converse_stream_chat(system_prompt, messages):
                 parts.append(chunk)
                 yield f"data: {json.dumps({'chunk': chunk})}\n\n"
         finally:

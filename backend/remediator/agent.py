@@ -7,7 +7,6 @@ import logging
 from common.bedrock import converse_json
 
 logger = logging.getLogger(__name__)
-from common.config import model_remediation
 from common.guardrails import enforce_grounding
 from common.heuristics import generate_questions, recommend_actions
 from common.models import (
@@ -57,7 +56,7 @@ def generate_remediation(
         f"Evidence: {normalized.evidence_snippets}"
         f"{clarification_block}"
     )
-    result = converse_json(model_remediation(), REMEDIATOR_INSTRUCTIONS, prompt)
+    result = converse_json(REMEDIATOR_INSTRUCTIONS, prompt)
 
     if result:
         try:
@@ -91,7 +90,7 @@ def evaluate_findings(
         f"Engineer findings: {findings}"
     )
 
-    result = converse_json(model_remediation(), EVALUATION_INSTRUCTIONS, prompt, max_tokens=600)
+    result = converse_json(EVALUATION_INSTRUCTIONS, prompt, max_tokens=600)
     logger.info("evaluate_findings LLM result: %s", result)
 
     if result is None:
@@ -169,7 +168,7 @@ def generate_followup_actions(
         f"Engineer findings from remediation:\n  {additional_context}"
     )
 
-    result = converse_json(model_remediation(), FOLLOWUP_INSTRUCTIONS, prompt, max_tokens=2000)
+    result = converse_json(FOLLOWUP_INSTRUCTIONS, prompt, max_tokens=2000)
     logger.info("generate_followup_actions LLM result: %s", result)
 
     if result is None:
@@ -213,7 +212,7 @@ def generate_pir(
         f"Actions taken:\n{action_lines or '  (no actions recorded)'}"
     )
 
-    result = converse_json(model_remediation(), PIR_INSTRUCTIONS, prompt)
+    result = converse_json(PIR_INSTRUCTIONS, prompt)
 
     if result:
         try:
