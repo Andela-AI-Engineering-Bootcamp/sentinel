@@ -8,6 +8,15 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS user_entitlements (
+  id TEXT PRIMARY KEY,
+  clerk_user_id TEXT NOT NULL UNIQUE REFERENCES users(clerk_user_id) ON DELETE CASCADE,
+  subscription_tier TEXT NOT NULL DEFAULT 'free',
+  live_incident_board_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS incidents (
   id TEXT PRIMARY KEY,
   clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id),
@@ -96,6 +105,9 @@ CREATE INDEX IF NOT EXISTS idx_jobs_incident_created
 
 CREATE INDEX IF NOT EXISTS idx_jobs_clerk_created
   ON jobs(clerk_user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_user_entitlements_clerk
+  ON user_entitlements(clerk_user_id);
 
 CREATE INDEX IF NOT EXISTS idx_remediation_job_created
   ON remediation_actions(job_id, created_at);

@@ -1,1 +1,8 @@
-{"/audit":"pages/audit.html","/_app":"pages/_app.js","/_error":"pages/_error.js","/dashboard":"pages/dashboard.html","/":"pages/index.html","/settings":"pages/settings.html","/analyze":"pages/analyze.html","/sign-up":"pages/sign-up.html","/sign-in":"pages/sign-in.html","/_document":"pages/_document.js","/404":"pages/404.html"}
+{
+  "/_app": "pages/_app.js",
+  "/_error": "pages/_error.js",
+  "/_document": "pages/_document.js",
+  "/live": "pages/live.js",
+  "/dashboard": "pages/dashboard.js",
+  "/": "pages/index.js"
+}

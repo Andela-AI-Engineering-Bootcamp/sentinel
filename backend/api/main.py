@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel as _Base
 
-from api.auth import AuthContext, require_auth
+from api.auth import AuthContext, get_user_entitlements, require_auth
 from common.config import get_db_path
 from common.log_stats import compute_log_stats
 from common.models import (
@@ -291,7 +291,13 @@ def health() -> dict[str, str]:
 
 @app.get("/api/me")
 def me(user: AuthContext = Depends(require_auth)) -> dict[str, Any]:
-    return {"user_id": user.user_id, "email": user.email}
+    entitlements = get_user_entitlements(user)
+    return {
+        "user_id": user.user_id,
+        "email": user.email,
+        "subscription_tier": entitlements.get("subscription_tier", "free"),
+        "features": entitlements.get("features", {}),
+    }
 
 
 @app.get("/api/team/members")

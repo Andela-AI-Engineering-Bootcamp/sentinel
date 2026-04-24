@@ -1,6 +1,7 @@
 import { SignedIn, SignedOut, SignInButton, UserButton, useUser } from "@clerk/nextjs";
 import Link from "next/link";
 
+import { useEntitlements } from "../context/EntitlementContext";
 import { isClerkEnabled } from "../lib/clerk";
 
 const clerkEnabled = isClerkEnabled();
@@ -9,6 +10,13 @@ const nav = [
   { href: "/", label: "Home" },
   { href: "/analyze", label: "Analyze" },
   { href: "/dashboard", label: "Dashboard" },
+  {
+    href: "/live",
+    label: "Live Incident Board",
+    feature: "live_incident_board",
+    badge: "Pro",
+    lockedHint: "Real-time CloudWatch incident detection for paid plans",
+  },
   { href: "/audit", label: "Audit" },
   { href: "/settings", label: "Settings" },
 ];
@@ -40,6 +48,8 @@ function UserSection() {
 }
 
 export default function AppShell({ children, activeHref = "/" }) {
+  const { hasFeature, loading } = useEntitlements();
+
   return (
     <div className="app-root">
       <div className="app-bg" aria-hidden />
@@ -63,15 +73,21 @@ export default function AppShell({ children, activeHref = "/" }) {
         </Link>
 
         <nav className="shell-nav" aria-label="Primary">
-          {nav.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`shell-nav-link${activeHref === item.href ? " is-active" : ""}`}
-            >
-              {item.label}
-            </Link>
-          ))}
+          {nav.map((item) => {
+            const locked = item.feature && !loading && !hasFeature(item.feature);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`shell-nav-link${activeHref === item.href ? " is-active" : ""}${locked ? " is-locked" : ""}`}
+                aria-disabled={locked ? "true" : undefined}
+                title={locked ? item.lockedHint : undefined}
+              >
+                <span className="shell-nav-label">{item.label}</span>
+                {item.badge ? <span className={`shell-nav-badge${locked ? " is-locked" : ""}`}>{item.badge}</span> : null}
+              </Link>
+            );
+          })}
         </nav>
 
         <div className="shell-foot">

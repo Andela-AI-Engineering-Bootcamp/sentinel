@@ -188,6 +188,63 @@ class Database:
             },
         )
 
+    def get_user_entitlements(self, clerk_user_id: str) -> dict[str, Any]:
+        uid = clerk_user_id or "anonymous"
+        row = self._query_one(
+            """
+            SELECT subscription_tier, live_incident_board_enabled
+            FROM user_entitlements
+            WHERE clerk_user_id=:clerk_user_id
+            """,
+            {"clerk_user_id": uid},
+        )
+        enabled = bool((row or {}).get("live_incident_board_enabled"))
+        tier = str((row or {}).get("subscription_tier") or "free").strip().lower() or "free"
+        return {
+            "subscription_tier": tier,
+            "features": {
+                "live_incident_board": enabled,
+            },
+        }
+
+    def upsert_user_entitlements(
+        self,
+        clerk_user_id: str,
+        *,
+        subscription_tier: str = "free",
+        live_incident_board_enabled: bool = False,
+        email: str | None = None,
+    ) -> None:
+        uid = clerk_user_id or "anonymous"
+        now = self._now_iso()
+        tier = (subscription_tier or "free").strip().lower() or "free"
+        self._ensure_user(uid, email=email)
+        self._execute(
+            """
+            INSERT INTO user_entitlements (
+              id, clerk_user_id, subscription_tier, live_incident_board_enabled,
+              created_at, updated_at
+            )
+            VALUES (
+              :id, :clerk_user_id, :subscription_tier, :live_incident_board_enabled,
+              :created_at, :updated_at
+            )
+            ON CONFLICT (clerk_user_id)
+            DO UPDATE
+              SET subscription_tier = EXCLUDED.subscription_tier,
+                  live_incident_board_enabled = EXCLUDED.live_incident_board_enabled,
+                  updated_at = EXCLUDED.updated_at
+            """,
+            {
+                "id": str(uuid.uuid4()),
+                "clerk_user_id": uid,
+                "subscription_tier": tier,
+                "live_incident_board_enabled": live_incident_board_enabled,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+
     def create_incident(
         self,
         text: str,
