@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 
-from common.config import get_db_path
-from common.store import Database
+from common.store import get_database
 
 
 def main() -> None:
-    db = Database(get_db_path())
+    db = get_database()
     try:
         incidents = db.list_incidents(limit=20)
         print(f"Recent incidents: {len(incidents)}")

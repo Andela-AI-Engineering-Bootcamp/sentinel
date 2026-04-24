@@ -19,7 +19,28 @@ async function request(path, options = {}) {
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(text || `Request failed: ${res.status}`);
+    // FastAPI validation errors (422) return JSON with a `detail` array.
+    // Extract a readable message so callers can surface it without dumping raw JSON.
+    if (res.status === 422) {
+      try {
+        const json = JSON.parse(text);
+        const msgs = (json.detail || [])
+          .map((d) => {
+            const raw = d.msg || d.message || JSON.stringify(d);
+            // FastAPI prepends "Value error, " to every Pydantic ValueError — strip it.
+            return raw.replace(/^value\s+error,\s*/i, "");
+          })
+          .join(" ");
+        const err = new Error(msgs || "Input validation failed.");
+        err.status = 422;
+        throw err;
+      } catch (parseErr) {
+        if (parseErr.status === 422) throw parseErr;
+      }
+    }
+    const err = new Error(text || `Request failed: ${res.status}`);
+    err.status = res.status;
+    throw err;
   }
 
   return res.json();

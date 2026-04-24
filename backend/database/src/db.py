@@ -11,14 +11,13 @@ except ImportError:  # pragma: no cover - script execution fallback
 
 ensure_backend_root_on_path()
 
-from common.config import aurora_database
-from common.store import Database
+from common.store import get_database as _get_database, _SentinelDb
 
 
-def get_database() -> Database:
-    """Return a database instance using configured Aurora database name."""
+def get_database() -> _SentinelDb:
+    """Return a database instance appropriate for the current environment."""
 
-    return Database(aurora_database())
+    return _get_database()
 
 
 def migration_file() -> Path:

@@ -1,97 +1,142 @@
-"""Aurora Data API persistence layer for Sentinel."""
+"""Persistence layer for Sentinel – Aurora (production) and SQLite (local)."""
 
 from __future__ import annotations
 
 import json
+import sqlite3
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 import boto3
 
-from common.config import aurora_cluster_arn, aurora_database, aurora_region, aurora_secret_arn
+from common.config import (
+    aurora_cluster_arn,
+    aurora_database,
+    aurora_region,
+    aurora_secret_arn,
+    is_local,
+    sqlite_path,
+)
 from common.models import IncidentAnalysis
 
 
-class Database:
-    """Lightweight Aurora Data API wrapper for incidents and analysis jobs."""
+_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  clerk_user_id TEXT NOT NULL UNIQUE,
+  email TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 
-    def __init__(self, database_name: str | None = None) -> None:
-        self.cluster_arn = aurora_cluster_arn()
-        self.secret_arn = aurora_secret_arn()
-        self.database = (database_name or aurora_database()).strip() or "sentinel"
-        self.region = aurora_region()
+CREATE TABLE IF NOT EXISTS incidents (
+  id TEXT PRIMARY KEY,
+  clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id),
+  title TEXT,
+  source TEXT NOT NULL,
+  raw_text TEXT NOT NULL,
+  sanitized_text TEXT,
+  guardrail_json TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  assigned_to TEXT,
+  resolved_at TEXT,
+  resolution_notes TEXT,
+  created_at TEXT NOT NULL
+);
 
-        if not self.cluster_arn or not self.secret_arn:
-            raise ValueError(
-                "Aurora not configured. Set AURORA_CLUSTER_ARN and AURORA_SECRET_ARN."
-            )
+CREATE TABLE IF NOT EXISTS jobs (
+  id TEXT PRIMARY KEY,
+  incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+  clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id),
+  status TEXT NOT NULL,
+  error_message TEXT,
+  analysis_json TEXT,
+  current_stage TEXT,
+  pipeline_events TEXT NOT NULL DEFAULT '[]',
+  similar_incidents_json TEXT,
+  clarification_answers_json TEXT,
+  pir_json TEXT,
+  created_at TEXT NOT NULL,
+  completed_at TEXT
+);
 
-        self._client = boto3.client("rds-data", region_name=self.region)
+CREATE TABLE IF NOT EXISTS remediation_actions (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  action_text TEXT NOT NULL,
+  action_type TEXT NOT NULL DEFAULT 'recommended',
+  status TEXT NOT NULL DEFAULT 'pending',
+  assigned_to TEXT,
+  completed_at TEXT,
+  notes TEXT,
+  severity TEXT NOT NULL DEFAULT 'medium',
+  due_date TEXT,
+  parent_action_id TEXT,
+  eval_response TEXT,
+  engineer_submission TEXT,
+  source_anchor_action_id TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS integrations (
+  id TEXT PRIMARY KEY,
+  clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  config_json TEXT NOT NULL DEFAULT '{}',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  action_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS follow_ups (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  action_id TEXT,
+  clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id) ON DELETE CASCADE,
+  user_email TEXT NOT NULL,
+  user_name TEXT,
+  message TEXT,
+  remind_at TEXT NOT NULL,
+  sent_at TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_incidents_clerk_created
+  ON incidents(clerk_user_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_incident_created
+  ON jobs(incident_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_clerk_created
+  ON jobs(clerk_user_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_remediation_job_created
+  ON remediation_actions(job_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_followups_due
+  ON follow_ups(remind_at, sent_at);
+
+CREATE INDEX IF NOT EXISTS idx_chat_job_action_created
+  ON chat_messages(job_id, action_id, created_at);
+"""
+
+
+class _SentinelDb:
+    """All domain methods live here; subclasses provide the DB primitives."""
 
     @staticmethod
     def _now_iso() -> str:
         return datetime.now(timezone.utc).isoformat()
-
-    @staticmethod
-    def _encode_param(value: Any) -> dict[str, Any]:
-        if value is None:
-            return {"isNull": True}
-        if isinstance(value, bool):
-            return {"booleanValue": value}
-        if isinstance(value, int):
-            return {"longValue": value}
-        if isinstance(value, float):
-            return {"doubleValue": value}
-        return {"stringValue": str(value)}
-
-    @classmethod
-    def _build_params(cls, params: dict[str, Any] | None) -> list[dict[str, Any]]:
-        if not params:
-            return []
-        out: list[dict[str, Any]] = []
-        for key, value in params.items():
-            out.append({"name": key, "value": cls._encode_param(value)})
-        return out
-
-    @staticmethod
-    def _decode_field(field: dict[str, Any]) -> Any:
-        if field.get("isNull"):
-            return None
-        if "stringValue" in field:
-            return field["stringValue"]
-        if "longValue" in field:
-            return field["longValue"]
-        if "doubleValue" in field:
-            return field["doubleValue"]
-        if "booleanValue" in field:
-            return field["booleanValue"]
-        if "arrayValue" in field:
-            array_values = field["arrayValue"].get("arrayValues", [])
-            return [Database._decode_field(item) for item in array_values]
-        if "blobValue" in field:
-            return field["blobValue"]
-        return None
-
-    def _run_statement(
-        self,
-        sql: str,
-        params: dict[str, Any] | None = None,
-        *,
-        include_metadata: bool = False,
-        transaction_id: str | None = None,
-    ) -> dict[str, Any]:
-        request: dict[str, Any] = {
-            "resourceArn": self.cluster_arn,
-            "secretArn": self.secret_arn,
-            "database": self.database,
-            "sql": sql,
-            "parameters": self._build_params(params),
-            "includeResultMetadata": include_metadata,
-        }
-        if transaction_id:
-            request["transactionId"] = transaction_id
-        return self._client.execute_statement(**request)
 
     def _query(
         self,
@@ -100,25 +145,7 @@ class Database:
         *,
         transaction_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        response = self._run_statement(
-            sql,
-            params,
-            include_metadata=True,
-            transaction_id=transaction_id,
-        )
-        metadata = response.get("columnMetadata") or []
-        if not metadata:
-            return []
-
-        columns = [(c.get("label") or c.get("name") or "").strip() for c in metadata]
-        rows: list[dict[str, Any]] = []
-        for rec in response.get("records") or []:
-            row: dict[str, Any] = {}
-            for idx, field in enumerate(rec):
-                key = columns[idx] if idx < len(columns) else f"col_{idx}"
-                row[key] = self._decode_field(field)
-            rows.append(row)
-        return rows
+        raise NotImplementedError
 
     def _query_one(
         self,
@@ -127,8 +154,7 @@ class Database:
         *,
         transaction_id: str | None = None,
     ) -> dict[str, Any] | None:
-        rows = self._query(sql, params, transaction_id=transaction_id)
-        return rows[0] if rows else None
+        raise NotImplementedError
 
     def _execute(
         self,
@@ -137,35 +163,15 @@ class Database:
         *,
         transaction_id: str | None = None,
     ) -> int:
-        response = self._run_statement(sql, params, transaction_id=transaction_id)
-        return int(response.get("numberOfRecordsUpdated") or 0)
+        raise NotImplementedError
 
     def execute_script(self, statements: list[str]) -> None:
-        if not statements:
-            return
-        tx = self._client.begin_transaction(
-            resourceArn=self.cluster_arn,
-            secretArn=self.secret_arn,
-            database=self.database,
-        )["transactionId"]
-        try:
-            for statement in statements:
-                sql = statement.strip()
-                if not sql:
-                    continue
-                self._execute(sql, transaction_id=tx)
-            self._client.commit_transaction(
-                resourceArn=self.cluster_arn,
-                secretArn=self.secret_arn,
-                transactionId=tx,
-            )
-        except Exception:
-            self._client.rollback_transaction(
-                resourceArn=self.cluster_arn,
-                secretArn=self.secret_arn,
-                transactionId=tx,
-            )
-            raise
+        raise NotImplementedError
+
+    def close(self) -> None:
+        pass
+
+    # --- Domain methods -----------------------------------------------------
 
     def _ensure_user(self, clerk_user_id: str, email: str | None = None) -> None:
         uid = clerk_user_id or "anonymous"
@@ -240,7 +246,9 @@ class Database:
             },
         )
 
-    def create_job(self, incident_id: str, clerk_user_id: str, status: str = "pending") -> str:
+    def create_job(
+        self, incident_id: str, clerk_user_id: str, status: str = "pending"
+    ) -> str:
         job_id = str(uuid.uuid4())
         uid = clerk_user_id or "anonymous"
         self._ensure_user(uid)
@@ -287,13 +295,7 @@ class Database:
             except json.JSONDecodeError:
                 events = []
 
-        events.append(
-            {
-                "stage": stage,
-                "detail": payload,
-                "at": self._now_iso(),
-            }
-        )
+        events.append({"stage": stage, "detail": payload, "at": self._now_iso()})
 
         self._execute(
             """
@@ -758,7 +760,9 @@ class Database:
             {"sent_at": self._now_iso(), "follow_up_id": follow_up_id},
         )
 
-    def save_chat_message(self, job_id: str, action_id: str, role: str, content: str) -> str:
+    def save_chat_message(
+        self, job_id: str, action_id: str, role: str, content: str
+    ) -> str:
         msg_id = str(uuid.uuid4())
         self._execute(
             """
@@ -905,6 +909,274 @@ class Database:
             )
         return updated > 0
 
+
+# ---------------------------------------------------------------------------
+# SQLite backend  (local development)
+# ---------------------------------------------------------------------------
+
+
+class SqliteDatabase(_SentinelDb):
+    """SQLite-backed store for local development. Zero AWS credentials required."""
+
+    def __init__(self, path: str | None = None) -> None:
+        self._path = path or sqlite_path()
+        self._lock = threading.Lock()
+        self._conn = sqlite3.connect(self._path, check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA foreign_keys=ON")
+        self._bootstrap()
+
+    # Columns that may be absent from databases created before they were added.
+    # Each entry is (table, column, sqlite_type_and_default).
+    _MIGRATIONS: list[tuple[str, str, str]] = [
+        ("jobs", "pipeline_events", "TEXT NOT NULL DEFAULT '[]'"),
+        ("jobs", "similar_incidents_json", "TEXT"),
+        ("jobs", "clarification_answers_json", "TEXT"),
+        ("jobs", "pir_json", "TEXT"),
+        ("jobs", "current_stage", "TEXT"),
+        ("jobs", "completed_at", "TEXT"),
+        ("jobs", "error_message", "TEXT"),
+        ("incidents", "sanitized_text", "TEXT"),
+        ("incidents", "guardrail_json", "TEXT"),
+        ("incidents", "assigned_to", "TEXT"),
+        ("incidents", "resolved_at", "TEXT"),
+        ("incidents", "resolution_notes", "TEXT"),
+        ("remediation_actions", "parent_action_id", "TEXT"),
+        ("remediation_actions", "eval_response", "TEXT"),
+        ("remediation_actions", "engineer_submission", "TEXT"),
+        ("remediation_actions", "source_anchor_action_id", "TEXT"),
+        ("remediation_actions", "due_date", "TEXT"),
+        ("remediation_actions", "notes", "TEXT"),
+        ("remediation_actions", "assigned_to", "TEXT"),
+        ("remediation_actions", "completed_at", "TEXT"),
+        ("follow_ups", "action_id", "TEXT"),
+        ("follow_ups", "user_name", "TEXT"),
+        ("follow_ups", "message", "TEXT"),
+        ("follow_ups", "sent_at", "TEXT"),
+    ]
+
+    def _bootstrap(self) -> None:
+        """Create tables/indexes and apply any missing-column migrations."""
+        with self._lock:
+            statements = [s.strip() for s in _SCHEMA_SQL.split(";") if s.strip()]
+            with self._conn:
+                for stmt in statements:
+                    self._conn.execute(stmt)
+                # Add columns that may be missing from pre-existing databases.
+                for table, column, definition in self._MIGRATIONS:
+                    try:
+                        self._conn.execute(
+                            f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+                        )
+                    except sqlite3.OperationalError:
+                        pass  # column already exists
+
+    def _query(
+        self,
+        sql: str,
+        params: dict[str, Any] | None = None,
+        *,
+        transaction_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            cur = self._conn.execute(sql, params or {})
+            return [dict(row) for row in cur.fetchall()]
+
+    def _query_one(
+        self,
+        sql: str,
+        params: dict[str, Any] | None = None,
+        *,
+        transaction_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        rows = self._query(sql, params)
+        return rows[0] if rows else None
+
+    def _execute(
+        self,
+        sql: str,
+        params: dict[str, Any] | None = None,
+        *,
+        transaction_id: str | None = None,
+    ) -> int:
+        with self._lock:
+            with self._conn:
+                cur = self._conn.execute(sql, params or {})
+            return cur.rowcount
+
+    def execute_script(self, statements: list[str]) -> None:
+        with self._lock:
+            with self._conn:
+                for stmt in statements:
+                    sql = stmt.strip()
+                    if sql:
+                        self._conn.execute(sql)
+
+    def close(self) -> None:
+        self._conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Aurora Data API backend  (production / AWS Lambda)
+# ---------------------------------------------------------------------------
+
+
+class Database(_SentinelDb):
+    """Aurora Serverless Data API backend."""
+
+    def __init__(self, database_name: str | None = None) -> None:
+        self.cluster_arn = aurora_cluster_arn()
+        self.secret_arn = aurora_secret_arn()
+        self.database = (database_name or aurora_database()).strip() or "sentinel"
+        self.region = aurora_region()
+
+        if not self.cluster_arn or not self.secret_arn:
+            raise ValueError(
+                "Aurora not configured. Set AURORA_CLUSTER_ARN and AURORA_SECRET_ARN."
+            )
+
+        self._client = boto3.client("rds-data", region_name=self.region)
+
+    @staticmethod
+    def _encode_param(value: Any) -> dict[str, Any]:
+        if value is None:
+            return {"isNull": True}
+        if isinstance(value, bool):
+            return {"booleanValue": value}
+        if isinstance(value, int):
+            return {"longValue": value}
+        if isinstance(value, float):
+            return {"doubleValue": value}
+        return {"stringValue": str(value)}
+
+    @classmethod
+    def _build_params(cls, params: dict[str, Any] | None) -> list[dict[str, Any]]:
+        if not params:
+            return []
+        return [{"name": k, "value": cls._encode_param(v)} for k, v in params.items()]
+
+    @staticmethod
+    def _decode_field(field: dict[str, Any]) -> Any:
+        if field.get("isNull"):
+            return None
+        if "stringValue" in field:
+            return field["stringValue"]
+        if "longValue" in field:
+            return field["longValue"]
+        if "doubleValue" in field:
+            return field["doubleValue"]
+        if "booleanValue" in field:
+            return field["booleanValue"]
+        if "arrayValue" in field:
+            return [
+                Database._decode_field(i)
+                for i in field["arrayValue"].get("arrayValues", [])
+            ]
+        if "blobValue" in field:
+            return field["blobValue"]
+        return None
+
+    def _run_statement(
+        self,
+        sql: str,
+        params: dict[str, Any] | None = None,
+        *,
+        include_metadata: bool = False,
+        transaction_id: str | None = None,
+    ) -> dict[str, Any]:
+        request: dict[str, Any] = {
+            "resourceArn": self.cluster_arn,
+            "secretArn": self.secret_arn,
+            "database": self.database,
+            "sql": sql,
+            "parameters": self._build_params(params),
+            "includeResultMetadata": include_metadata,
+        }
+        if transaction_id:
+            request["transactionId"] = transaction_id
+        return self._client.execute_statement(**request)
+
+    def _query(
+        self,
+        sql: str,
+        params: dict[str, Any] | None = None,
+        *,
+        transaction_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        response = self._run_statement(
+            sql, params, include_metadata=True, transaction_id=transaction_id
+        )
+        metadata = response.get("columnMetadata") or []
+        if not metadata:
+            return []
+        columns = [(c.get("label") or c.get("name") or "").strip() for c in metadata]
+        rows: list[dict[str, Any]] = []
+        for rec in response.get("records") or []:
+            row: dict[str, Any] = {}
+            for idx, field in enumerate(rec):
+                key = columns[idx] if idx < len(columns) else f"col_{idx}"
+                row[key] = self._decode_field(field)
+            rows.append(row)
+        return rows
+
+    def _query_one(
+        self,
+        sql: str,
+        params: dict[str, Any] | None = None,
+        *,
+        transaction_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        rows = self._query(sql, params, transaction_id=transaction_id)
+        return rows[0] if rows else None
+
+    def _execute(
+        self,
+        sql: str,
+        params: dict[str, Any] | None = None,
+        *,
+        transaction_id: str | None = None,
+    ) -> int:
+        response = self._run_statement(sql, params, transaction_id=transaction_id)
+        return int(response.get("numberOfRecordsUpdated") or 0)
+
+    def execute_script(self, statements: list[str]) -> None:
+        if not statements:
+            return
+        tx = self._client.begin_transaction(
+            resourceArn=self.cluster_arn,
+            secretArn=self.secret_arn,
+            database=self.database,
+        )["transactionId"]
+        try:
+            for statement in statements:
+                sql = statement.strip()
+                if sql:
+                    self._execute(sql, transaction_id=tx)
+            self._client.commit_transaction(
+                resourceArn=self.cluster_arn,
+                secretArn=self.secret_arn,
+                transactionId=tx,
+            )
+        except Exception:
+            self._client.rollback_transaction(
+                resourceArn=self.cluster_arn,
+                secretArn=self.secret_arn,
+                transactionId=tx,
+            )
+            raise
+
     def close(self) -> None:
         """No persistent connection to close for Data API client."""
-        return None
+
+
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
+
+
+def get_database() -> _SentinelDb:
+    """Return a SqliteDatabase locally or an Aurora Database in production."""
+    if is_local():
+        return SqliteDatabase()
+    return Database()

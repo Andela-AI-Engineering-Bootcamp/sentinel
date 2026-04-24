@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import json
 
-from common.config import get_db_path
 from common.pipeline import run_job
-from common.store import Database
+from common.store import get_database
 
 
 def _job_id_from_record(record: dict) -> str | None:
@@ -19,7 +18,7 @@ def _job_id_from_record(record: dict) -> str | None:
 
 
 def lambda_handler(event, context):
-    db = Database(get_db_path())
+    db = get_database()
     results: list[dict] = []
 
     if "Records" in event:

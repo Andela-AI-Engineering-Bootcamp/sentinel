@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 Severity = Literal["low", "medium", "high", "critical"]
@@ -18,6 +18,40 @@ class IncidentInput(BaseModel):
     text: str = Field(min_length=1, max_length=50000)
     title: str | None = Field(default=None, max_length=200)
     source: str = Field(default="manual", max_length=100)
+
+    @field_validator("text", mode="before")
+    @classmethod
+    def must_not_contain_script_injection(cls, v: object) -> object:
+        """Hard-reject input that contains script tags or javascript: URIs.
+
+        Runs before the log-format check so the user gets a clear rejection
+        rather than a format error when the real problem is embedded markup.
+        """
+        from common.guardrails import detect_hard_xss  # noqa: PLC0415
+
+        if not isinstance(v, str):
+            return v
+        hits = detect_hard_xss(v)
+        if hits:
+            joined = ", ".join(hits[:3])
+            raise ValueError(
+                f"Input contains embedded script or markup ({joined}). "
+                "Remove HTML tags and script blocks — log data must not contain executable markup."
+            )
+        return v
+
+    @field_validator("text", mode="before")
+    @classmethod
+    def must_be_log_format(cls, v: object) -> object:
+        """Reject input that carries no log-format signals."""
+        from common.guardrails import validate_log_format  # noqa: PLC0415
+
+        if not isinstance(v, str):
+            return v  # let the type system report this error
+        valid, reasons = validate_log_format(v)
+        if not valid:
+            raise ValueError(" ".join(reasons))
+        return v
 
 
 class GuardrailReport(BaseModel):

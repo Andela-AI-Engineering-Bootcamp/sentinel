@@ -8,9 +8,9 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from common.config import get_db_path, reminder_interval_seconds
+from common.config import reminder_interval_seconds
 from common.email import send_follow_up_reminder
-from common.store import Database
+from common.store import get_database
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ class ReminderScheduler:
     def process_all_pending(self) -> tuple[int, int]:
         """Query the database and attempt to send all due follow-ups."""
         now_iso = datetime.now(timezone.utc).isoformat()
-        db = Database(get_db_path())
+        db = get_database()
         sent = 0
         failed = 0
 

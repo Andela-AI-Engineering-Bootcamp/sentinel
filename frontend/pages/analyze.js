@@ -46,6 +46,7 @@ async function runIncidentAnalysis(payload, getToken, onLiveEvents) {
 
 function HomeContent({ getToken = null, userProfile = null }) {
   const [loading, setLoading] = useState(false);
+  const [submitError, setSubmitError] = useState("");
   const {
     result,
     setResult,
@@ -61,6 +62,7 @@ function HomeContent({ getToken = null, userProfile = null }) {
   async function onAnalyze(payload) {
     setLoading(true);
     setError("");
+    setSubmitError("");
     updateDraft({ title: payload.title, source: payload.source, text: payload.text });
     setResult(null);
     setPipelineEvents([]);
@@ -69,7 +71,12 @@ function HomeContent({ getToken = null, userProfile = null }) {
       setResult(job);
       setPipelineEvents(events);
     } catch (err) {
-      setError(err.message || "Failed to analyze incident");
+      if (err.status === 422) {
+        // Input validation failure — show inside the form, not as a general error.
+        setSubmitError(err.message || "Input validation failed. Check your log data and try again.");
+      } else {
+        setError(err.message || "Failed to analyze incident");
+      }
     } finally {
       setLoading(false);
     }
@@ -96,9 +103,10 @@ function HomeContent({ getToken = null, userProfile = null }) {
             onAnalyze={onAnalyze}
             loading={loading}
             draft={draft}
-            onDraftChange={updateDraft}
-            onClear={() => clearAnalysis()}
+            onDraftChange={(changes) => { setSubmitError(""); updateDraft(changes); }}
+            onClear={() => { clearAnalysis(); setSubmitError(""); }}
             canClear={canClear}
+            submitError={submitError}
           />
           {error ? <p className="error compact">{error}</p> : null}
         </div>

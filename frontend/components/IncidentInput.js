@@ -5,7 +5,7 @@ import { detectContentIssue } from "../lib/contentGuard";
 /** Icons shown beside each issue row. */
 const SEVERITY_ICON = { danger: "🚫", warn: "⚠" };
 
-export default function IncidentInput({ onAnalyze, loading, draft, onDraftChange, onClear, canClear }) {
+export default function IncidentInput({ onAnalyze, loading, draft, onDraftChange, onClear, canClear, submitError }) {
   const fileRef = useRef(null);
   const warnRef = useRef(null);
   /**
@@ -80,6 +80,13 @@ export default function IncidentInput({ onAnalyze, loading, draft, onDraftChange
   const hasDanger = showWarning && contentWarning.issues.some((i) => i.severity === "danger");
   const overallSeverity = hasDanger ? "danger" : "warn";
 
+  // These issue types are hard blocks — the server will also reject them.
+  const HARD_BLOCK_IDS = new Set(["wrong_content_type", "script_tag", "html_structural", "js_uri", "entity_js_uri", "data_uri", "svg_xss", "css_url_injection", "dom_api"]);
+  const hasHardBlock = showWarning && contentWarning.issues.some((i) => HARD_BLOCK_IDS.has(i.id));
+  const hasFormatIssue = showWarning && contentWarning.issues.some((i) => i.id === "wrong_content_type");
+  // Only allow "proceed anyway" for softer signals (e.g. prompt_injection phrases the backend will strip).
+  const canProceedAnyway = hasDanger && !hasHardBlock;
+
   const sourceLabel =
     showWarning && contentWarning.source === "upload"
       ? `in uploaded file "${contentWarning.filename}"`
@@ -88,6 +95,18 @@ export default function IncidentInput({ onAnalyze, loading, draft, onDraftChange
   return (
     <form className="card stack" onSubmit={submit}>
       <h2>Incident Input</h2>
+
+      {submitError && (
+        <div className="content-warn content-warn--danger" role="alert" aria-live="assertive">
+          <div className="content-warn__header">
+            <span className="content-warn__title-icon">🚫</span>
+            <strong className="content-warn__title">Submission rejected by server</strong>
+          </div>
+          <p className="content-warn__issue-detail" style={{ margin: "0.25rem 0 0 2rem" }}>
+            {submitError}
+          </p>
+        </div>
+      )}
       <label>
         Incident Title
         <input
@@ -161,14 +180,26 @@ export default function IncidentInput({ onAnalyze, loading, draft, onDraftChange
           </ul>
 
           <div className="content-warn__footer">
-            <button type="button" className="btn btn-warn-proceed" onClick={proceedAnyway}>
-              Analyze anyway
-            </button>
-            <span className="content-warn__footer-note muted small">
-              {hasDanger
-                ? "Script tags, HTML injection, and prompt-injection phrases will be stripped by the backend before analysis."
-                : "Results may be less accurate for non-log content."}
-            </span>
+            {canProceedAnyway ? (
+              <>
+                <button type="button" className="btn btn-warn-proceed" onClick={proceedAnyway}>
+                  Analyze anyway
+                </button>
+                <span className="content-warn__footer-note muted small">
+                  Prompt-injection phrases will be stripped by the backend before analysis.
+                </span>
+              </>
+            ) : hasHardBlock ? (
+              <span className="content-warn__footer-note muted small">
+                {hasFormatIssue
+                  ? "Fix the input above — paste log output, a stack trace, a structured log file, or newline-delimited JSON logs. The server will reject content that is not log data."
+                  : "Remove the HTML or script content before submitting. Log data must not contain markup or executable code."}
+              </span>
+            ) : (
+              <span className="content-warn__footer-note muted small">
+                Results may be less accurate for non-log content.
+              </span>
+            )}
           </div>
         </div>
       )}
@@ -188,8 +219,8 @@ export default function IncidentInput({ onAnalyze, loading, draft, onDraftChange
           hidden
           onChange={onFileChange}
         />
-        <button type="submit" className="btn" disabled={loading || !draft.text.trim()}>
-          {loading ? "Analyzing..." : showWarning ? "Analyze anyway?" : "Analyze Incident"}
+        <button type="submit" className="btn" disabled={loading || !draft.text.trim() || hasHardBlock}>
+          {loading ? "Analyzing..." : showWarning && !hasFormatIssue ? "Analyze anyway?" : "Analyze Incident"}
         </button>
         <button
           type="button"

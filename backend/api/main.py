@@ -20,7 +20,6 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel as _Base
 
 from api.auth import AuthContext, require_auth
-from common.config import get_db_path
 from common.log_stats import compute_log_stats
 from common.models import (
     ActionChatRequest,
@@ -43,7 +42,7 @@ from common.audit_pdf import render_audit_classic_pdf
 from common.pdf_report import render_job_pdf
 from common.pipeline import create_incident_and_job, parse_analysis, run_job
 from common.scheduler import ReminderScheduler
-from common.store import Database
+from common.store import Database, get_database
 from investigator.agent import parse_streamed_root_cause, stream_investigation_text
 
 logger = logging.getLogger(__name__)
@@ -77,7 +76,7 @@ app.add_middleware(
 
 
 def _db() -> Database:
-    return Database(get_db_path())
+    return get_database()  # type: ignore[return-value]
 
 
 def _job_view(row: dict[str, Any]) -> dict[str, Any]:

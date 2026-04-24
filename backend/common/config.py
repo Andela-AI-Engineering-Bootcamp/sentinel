@@ -17,8 +17,21 @@ if load_dotenv is not None:
     load_dotenv(_repo_env, override=False)
 
 
+def is_local() -> bool:
+    """Return True when running outside AWS (no Aurora ARNs configured)."""
+    return not (os.getenv("AURORA_CLUSTER_ARN", "").strip() and os.getenv("AURORA_SECRET_ARN", "").strip())
+
+
+def sqlite_path() -> str:
+    """Absolute path to the local SQLite database file."""
+    default = str(Path(__file__).resolve().parents[2] / "sentinel.db")
+    return os.getenv("LOCAL_DB_PATH", default)
+
+
 def get_db_path() -> str:
-    """Backward-compatible alias: now returns Aurora database name."""
+    """Backward-compatible alias: returns Aurora database name or local SQLite path."""
+    if is_local():
+        return sqlite_path()
     return aurora_database()
 
 
