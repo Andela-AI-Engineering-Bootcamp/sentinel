@@ -37,6 +37,8 @@ from common.models import (
     JobCreateResponse,
     NormalizedIncident,
     RemediationFollowUpRequest,
+    IncidentCompareRequest,
+    IncidentCompareResult,
 )
 from common.audit_pdf import render_audit_classic_pdf
 from common.pdf_report import render_job_pdf
@@ -44,6 +46,7 @@ from common.pipeline import create_incident_and_job, parse_analysis, run_job
 from common.scheduler import ReminderScheduler
 from common.store import Database, get_database
 from investigator.agent import parse_streamed_root_cause, stream_investigation_text
+from comparator.agent import compare_workflows
 
 logger = logging.getLogger(__name__)
 
@@ -444,6 +447,39 @@ def list_jobs_endpoint(
         db.close()
 
 
+@app.post("/api/jobs/compare", response_model=IncidentCompareResult)
+def post_compare_incidents(
+    body: IncidentCompareRequest,
+    user: AuthContext = Depends(require_auth),
+) -> IncidentCompareResult:
+    """LLM compare of two completed workflow snapshots owned by the caller."""
+    if body.job_id_a == body.job_id_b:
+        raise HTTPException(status_code=422, detail="job_id_a and job_id_b must differ")
+
+    db = _db()
+    try:
+        row_a = db.get_job(body.job_id_a, clerk_user_id=user.user_id)
+        row_b = db.get_job(body.job_id_b, clerk_user_id=user.user_id)
+        if not row_a or not row_b:
+            raise HTTPException(status_code=404, detail="One or both jobs not found")
+        for row, jid in (row_a, body.job_id_a), (row_b, body.job_id_b):
+            st = (row.get("status") or "").lower()
+            if st != "completed":
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Job {jid} is not completed (status={st!r})",
+                )
+        view_a = _enrich_job_view(row_a, db, user.user_id)
+        view_b = _enrich_job_view(row_b, db, user.user_id)
+        wf_a = _build_workflow_export(row_a, view_a, db, body.job_id_a, user.user_id)
+        wf_b = _build_workflow_export(row_b, view_b, db, body.job_id_b, user.user_id)
+        return compare_workflows(
+            body.job_id_a, body.job_id_b, wf_a, wf_b
+        )
+    finally:
+        db.close()
+
+
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str, user: AuthContext = Depends(require_auth)) -> dict[str, Any]:
     db = _db()
@@ -471,6 +507,7 @@ def get_workflow_snapshot(
         return _build_workflow_export(row, view, db, job_id, user.user_id)
     finally:
         db.close()
+
 
 
 @app.get("/api/jobs/{job_id}/audit/pdf")

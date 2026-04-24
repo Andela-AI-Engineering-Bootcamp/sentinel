@@ -11,6 +11,7 @@ const nav = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/audit", label: "Audit" },
   { href: "/settings", label: "Settings" },
+  { href: "/compare", label: "Compare" },
 ];
 
 function UserSection() {

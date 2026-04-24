@@ -253,3 +253,31 @@ class IncidentResolveRequest(BaseModel):
 
     resolution_notes: str | None = None
     status: Literal["open", "in_progress", "resolved"] = "resolved"
+
+
+CompareVerdict = Literal["likely_same", "likely_different", "unclear"]
+
+
+class IncidentCompareRequest(BaseModel):
+    job_id_a: str = Field(min_length=1)
+    job_id_b: str = Field(min_length=1)
+
+    @field_validator("job_id_b", mode="after")
+    @classmethod
+    def ids_must_differ(cls, b: str, info) -> str:
+        a = info.data.get("job_id_a")
+        if a and b == a:
+            raise ValueError("job_id_a and job_id_b must be different")
+        return b
+
+
+class IncidentCompareResult(BaseModel):
+    job_id_a: str
+    job_id_b: str
+    verdict: CompareVerdict
+    confidence: Confidence
+    overlapping_symptoms: list[str] = Field(default_factory=list)
+    divergences: list[str] = Field(default_factory=list)
+    operator_next_steps: list[str] = Field(default_factory=list)
+    notes: str = ""
+    generated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
