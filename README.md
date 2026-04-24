@@ -73,7 +73,7 @@ Deeper reference: [guides/architecture.md](guides/architecture.md), [guides/agen
 - [AWS deployment](#aws-deployment)
 - [Documentation](#documentation)
 - [Squad contributions](#squad-contributions)
-- [Contributing norms](#contributing-norms)
+- [Tech stack](#tech-stack)
 
 ---
 
@@ -287,12 +287,27 @@ Infrastructure is organized as **independent Terraform stages** under [terraform
 
 ---
 
-## Contributing norms
+## Tech stack
 
-- Use **uv** for Python installs and script execution ([AGENTS.md](AGENTS.md)).
-- Prefer **incremental** diagnosis before large refactors.
-- **Terraform**: keep stage directories independent; local state is acceptable per project conventions.
-- **Models**: prefer a strong model for investigator/remediator; lighter models for supporting tasks where appropriate.
+**Language:** Python 3.12+  
+
+**Backend:** FastAPI · Uvicorn · Pydantic v2 · httpx · PyJWT · fpdf2 · python-dotenv · Mangum (Lambda)  
+
+**Frontend:** Next.js 14 · React 18 · Pages Router · Clerk · Recharts  
+
+**LLM access:** OpenRouter **or** Amazon Bedrock (boto3)  
+
+**Database:** SQLite (local) · Aurora Serverless v2 + RDS Data API (AWS path)  
+
+**Cloud (target deployment):** API Gateway · Lambda · SQS · CloudFront · S3 · App Runner (Intel) · EventBridge / CloudWatch  
+
+**Infrastructure as code:** Terraform (staged modules under `terraform/`)  
+
+**Auth:** Clerk (JWT) · optional `AUTH_DISABLED` for local development  
+
+**Tooling:** uv · npm · pytest  
+
+For agent naming and model conventions, see [AGENTS.md](AGENTS.md).
 
 ---
 
