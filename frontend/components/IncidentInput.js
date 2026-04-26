@@ -7,6 +7,7 @@ const SEVERITY_ICON = { danger: "🚫", warn: "⚠" };
 
 export default function IncidentInput({ onAnalyze, loading, draft, onDraftChange, onClear, canClear, submitError }) {
   const fileRef = useRef(null);
+  const monitorFileRef = useRef(null);
   const warnRef = useRef(null);
   /**
    * contentWarning shape:
@@ -29,6 +30,14 @@ export default function IncidentInput({ onAnalyze, loading, draft, onDraftChange
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft.text]);
+
+  function onMonitorFileChange(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    // We only get the filename for security reasons, but it helps.
+    onDraftChange({ path: file.name });
+    event.target.value = "";
+  }
 
   async function onFileChange(event) {
     const file = event.target.files?.[0];
@@ -60,7 +69,8 @@ export default function IncidentInput({ onAnalyze, loading, draft, onDraftChange
       setTimeout(() => warnRef.current?.classList.remove("content-warn--shake"), 600);
       return;
     }
-    onAnalyze({ title: draft.title.trim(), source: draft.source, text: draft.text.trim() });
+    const textToSubmit = draft.source === "monitoring" ? draft.path : draft.text;
+    onAnalyze({ title: draft.title.trim(), source: draft.source, text: textToSubmit.trim() });
   }
 
   function dismiss() {
@@ -71,8 +81,10 @@ export default function IncidentInput({ onAnalyze, loading, draft, onDraftChange
   function proceedAnyway() {
     setAcknowledged(true);
     setContentWarning(null);
-    onAnalyze({ title: draft.title.trim(), source: draft.source, text: draft.text.trim() });
+    const textToSubmit = draft.source === "monitoring" ? draft.path : draft.text;
+    onAnalyze({ title: draft.title.trim(), source: draft.source, text: textToSubmit.trim() });
   }
+
 
   const showWarning = contentWarning && !acknowledged;
 
@@ -128,16 +140,55 @@ export default function IncidentInput({ onAnalyze, loading, draft, onDraftChange
           <option value="monitoring">Monitoring export</option>
         </select>
       </label>
-      <label>
-        Paste Logs / Incident Text
-        <textarea
-          className="input textarea"
-          value={draft.text}
-          onChange={(e) => onDraftChange({ text: e.target.value })}
-          placeholder={"2024-04-23T08:12:44Z ERROR database connection refused...\n2024-04-23T08:12:50Z CRITICAL panic: runtime error...\n\nPaste logs, stack trace, and context here..."}
-          required
-        />
-      </label>
+      {draft.source === "monitoring" ? (
+        <label>
+          Local/Remote Path
+          <div className="row gap" style={{ alignItems: "stretch" }}>
+            <input
+              className="input"
+              value={draft.path || ""}
+              onChange={(e) => onDraftChange({ path: e.target.value })}
+              placeholder="/var/log/syslog or s3://my-bucket/logs/..."
+              style={{ flex: 1 }}
+              required
+            />
+            <button
+              type="button"
+              className="btn btn-muted"
+              style={{ whiteSpace: "nowrap" }}
+              onClick={() => monitorFileRef.current?.click()}
+            >
+              Browse...
+            </button>
+            <input
+              ref={monitorFileRef}
+              type="file"
+              hidden
+              onChange={onMonitorFileChange}
+            />
+          </div>
+          <p className="muted small" style={{ marginTop: 4 }}>
+            Select a local file to populate the path, then adjust it if needed.
+          </p>
+        </label>
+      ) : (
+        (draft.source === "manual" || (draft.source === "upload" && draft.text)) && (
+          <label>
+            {draft.source === "upload" ? "File Content" : "Paste Logs / Incident Text"}
+            <textarea
+              className="input textarea"
+              value={draft.text}
+              onChange={(e) => onDraftChange({ text: e.target.value })}
+              placeholder={
+                draft.source === "upload"
+                  ? "Select a file to see its content here..."
+                  : "2024-04-23T08:12:44Z ERROR database connection refused...\n2024-04-23T08:12:50Z CRITICAL panic: runtime error...\n\nPaste logs, stack trace, and context here..."
+              }
+              required
+            />
+          </label>
+        )
+      )}
 
       {showWarning && (
         <div
@@ -205,13 +256,15 @@ export default function IncidentInput({ onAnalyze, loading, draft, onDraftChange
       )}
 
       <div className="row gap wrap-actions">
-        <button
-          type="button"
-          className="btn btn-muted"
-          onClick={() => fileRef.current?.click()}
-        >
-          Upload .txt or .json
-        </button>
+        {draft.source === "upload" && (
+          <button
+            type="button"
+            className="btn btn-muted"
+            onClick={() => fileRef.current?.click()}
+          >
+            Upload .txt or .json
+          </button>
+        )}
         <input
           ref={fileRef}
           type="file"
@@ -219,7 +272,7 @@ export default function IncidentInput({ onAnalyze, loading, draft, onDraftChange
           hidden
           onChange={onFileChange}
         />
-        <button type="submit" className="btn" disabled={loading || !draft.text.trim() || hasHardBlock}>
+        <button type="submit" className="btn" disabled={loading || (draft.source === "monitoring" ? !draft.path?.trim() : !draft.text.trim()) || hasHardBlock}>
           {loading ? "Analyzing..." : showWarning && !hasFormatIssue ? "Analyze anyway?" : "Analyze Incident"}
         </button>
         <button
