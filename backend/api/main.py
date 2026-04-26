@@ -737,35 +737,6 @@ def list_jobs_endpoint(
     finally:
         db.close()
 
-
-@app.get("/api/jobs/{job_id}")
-def get_job(job_id: str, user: AuthContext = Depends(require_auth)) -> dict[str, Any]:
-    db = _db()
-    try:
-        row = db.get_job(job_id, clerk_user_id=user.user_id)
-        if not row:
-            raise HTTPException(status_code=404, detail="Job not found")
-        return _enrich_job_view(row, db, user.user_id)
-    finally:
-        db.close()
-
-
-@app.get("/api/jobs/{job_id}/workflow")
-def get_workflow_snapshot(
-    job_id: str, user: AuthContext = Depends(require_auth)
-) -> dict[str, Any]:
-    """Readonly full workflow: analysis stages, remediation actions, follow-ups, chat, PIR, incident context."""
-
-    db = _db()
-    try:
-        row = db.get_job(job_id, clerk_user_id=user.user_id)
-        if not row:
-            raise HTTPException(status_code=404, detail="Job not found")
-        view = _enrich_job_view(row, db, user.user_id)
-        return _build_workflow_export(row, view, db, job_id, user.user_id)
-    finally:
-        db.close()
-
 @app.post("/api/jobs/compare", response_model=IncidentCompareResult)
 def post_compare_incidents(
     body: IncidentCompareRequest,
@@ -797,6 +768,36 @@ def post_compare_incidents(
         )
     finally:
         db.close()
+
+@app.get("/api/jobs/{job_id}")
+def get_job(job_id: str, user: AuthContext = Depends(require_auth)) -> dict[str, Any]:
+    db = _db()
+    try:
+        row = db.get_job(job_id, clerk_user_id=user.user_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return _enrich_job_view(row, db, user.user_id)
+    finally:
+        db.close()
+
+
+@app.get("/api/jobs/{job_id}/workflow")
+def get_workflow_snapshot(
+    job_id: str, user: AuthContext = Depends(require_auth)
+) -> dict[str, Any]:
+    """Readonly full workflow: analysis stages, remediation actions, follow-ups, chat, PIR, incident context."""
+
+    db = _db()
+    try:
+        row = db.get_job(job_id, clerk_user_id=user.user_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Job not found")
+        view = _enrich_job_view(row, db, user.user_id)
+        return _build_workflow_export(row, view, db, job_id, user.user_id)
+    finally:
+        db.close()
+
+
 
 @app.get("/api/jobs/{job_id}/audit/pdf")
 def get_audit_pdf(job_id: str, user: AuthContext = Depends(require_auth)) -> Any:
