@@ -15,9 +15,37 @@ BACKEND_ROOT = ROOT.parent
 ZIP_PATH = ROOT / "api_lambda.zip"
 DOCKER_IMAGE = "public.ecr.aws/lambda/python:3.12"
 DOCKER_PLATFORM = "linux/amd64"
-SOURCE_DIRS = ["api", "common", "normalizer", "summarizer", "investigator", "remediator", "reports"]
+SOURCE_DIRS = [
+    "api",
+    "common",
+    "integrations",
+    "normalizer",
+    "summarizer",
+    "investigator",
+    "remediator",
+    "reports",
+]
 SKIP_DIRS = {"__pycache__", ".venv"}
 SKIP_SUFFIXES = {".pyc", ".pyo"}
+
+
+def _copy_ignore(dirpath: str, names: list[str]) -> list[str]:
+    """Skip caches, bytecode, and pytest-only modules (same rules as package_docker.py)."""
+    ignored: list[str] = []
+    base = Path(dirpath)
+    for name in names:
+        if name in SKIP_DIRS:
+            ignored.append(name)
+            continue
+        if name.endswith((".pyc", ".pyo")):
+            ignored.append(name)
+            continue
+        path = base / name
+        if path.suffix == ".py":
+            stem = path.stem
+            if name.startswith("test_") or stem.endswith("_test"):
+                ignored.append(name)
+    return ignored
 
 
 def _dependencies() -> list[str]:
@@ -56,7 +84,7 @@ def _copy_sources(target_dir: Path) -> None:
             src,
             dst,
             dirs_exist_ok=True,
-            ignore=shutil.ignore_patterns(*SKIP_DIRS, "*.pyc", "*.pyo"),
+            ignore=_copy_ignore,
         )
 
 

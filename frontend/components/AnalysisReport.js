@@ -928,7 +928,19 @@ function RemediationChecklist({ jobId, getToken, userProfile }) {
   const [followUps, setFollowUps] = useState([]);
 
   useEffect(() => {
-    if (!jobId) return;
+    if (!jobId) {
+      setActions([]);
+      setFollowUps([]);
+      setLoaded(false);
+      setChatAction(null);
+      setRemindAction(null);
+      return;
+    }
+    setActions([]);
+    setFollowUps([]);
+    setLoaded(false);
+    setChatAction(null);
+    setRemindAction(null);
     let cancel = false;
     (async () => {
       try {
@@ -1136,7 +1148,17 @@ function ImmediateChecksCard({ jobId, getToken, userProfile }) {
   const [followUps, setFollowUps] = useState([]);
 
   useEffect(() => {
-    if (!jobId) return;
+    if (!jobId) {
+      setActions([]);
+      setFollowUps([]);
+      setLoaded(false);
+      setRemindAction(null);
+      return;
+    }
+    setActions([]);
+    setFollowUps([]);
+    setLoaded(false);
+    setRemindAction(null);
     let cancel = false;
     (async () => {
       try {

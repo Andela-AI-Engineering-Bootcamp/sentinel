@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import socket
 import subprocess
 from pathlib import Path
 
@@ -32,6 +33,12 @@ def _load_dotenv(path: Path) -> dict[str, str]:
     return result
 
 
+def _port_in_use(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.4)
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
 def main() -> None:
     backend_cmd = ["uv", "run", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
     frontend_cmd = ["npm", "run", "dev"]
@@ -50,6 +57,14 @@ def main() -> None:
     # Only disable auth if no Clerk config is present at all
     if not backend_env.get("CLERK_JWKS_URL") and not backend_env.get("CLERK_ISSUER"):
         backend_env.setdefault("AUTH_DISABLED", "true")
+
+    if _port_in_use(8000):
+        print(
+            "WARNING: Something is already listening on port 8000. "
+            "Uvicorn will fail to bind; the UI will still talk to that process (often an OLD API).",
+            flush=True,
+        )
+        print("  Free the port:  lsof -ti :8000 | xargs kill -9", flush=True)
 
     backend = subprocess.Popen(backend_cmd, cwd=BACKEND_DIR, env=backend_env, shell=os.name == "nt")
     frontend = subprocess.Popen(frontend_cmd, cwd=FRONTEND_DIR, env=frontend_env, shell=os.name == "nt")

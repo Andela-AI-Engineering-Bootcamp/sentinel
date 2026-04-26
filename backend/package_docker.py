@@ -13,12 +13,31 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 COMMON_DIR = ROOT / "common"
+INTEGRATIONS_DIR = ROOT / "integrations"
 AGENTS = ["planner", "normalizer", "summarizer", "investigator", "remediator"]
+
+
+def _packagable_py(path: Path) -> bool:
+    """Omit pytest modules and other *_*_test.py helpers from Lambda zips."""
+    name = path.name
+    stem = path.stem
+    if name.startswith("test_") or stem.endswith("_test"):
+        return False
+    return True
 
 
 def _write_common(zf: zipfile.ZipFile) -> None:
     for path in COMMON_DIR.rglob("*.py"):
-        zf.write(path, path.relative_to(ROOT).as_posix())
+        if _packagable_py(path):
+            zf.write(path, path.relative_to(ROOT).as_posix())
+
+
+def _write_integrations(zf: zipfile.ZipFile) -> None:
+    if not INTEGRATIONS_DIR.is_dir():
+        return
+    for path in INTEGRATIONS_DIR.rglob("*.py"):
+        if _packagable_py(path):
+            zf.write(path, path.relative_to(ROOT).as_posix())
 
 
 def _build_agent(agent: str) -> Path:
@@ -33,6 +52,7 @@ def _build_agent(agent: str) -> Path:
             if path.exists():
                 zf.write(path, file_name)
         _write_common(zf)
+        _write_integrations(zf)
 
     return out
 
@@ -48,6 +68,7 @@ def _build_dir_zip(source_dir: Path, zip_name: str, files: list[str]) -> Path:
             if path.exists():
                 zf.write(path, file_name)
         _write_common(zf)
+        _write_integrations(zf)
 
     return out
 

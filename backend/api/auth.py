@@ -79,8 +79,9 @@ def verify_clerk_token(token: str) -> dict:
             "options": {"verify_aud": False},
         }
 
-        issuer = os.getenv("CLERK_ISSUER", "").strip()
+        issuer = os.getenv("CLERK_ISSUER", "").strip().rstrip("/")
         if issuer:
+            # JWT `iss` from Clerk does not include a trailing slash; env values often do.
             decode_kwargs["issuer"] = issuer
 
         payload = jwt.decode(token, signing_key, **decode_kwargs)

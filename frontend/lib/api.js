@@ -38,6 +38,18 @@ async function request(path, options = {}) {
         if (parseErr.status === 422) throw parseErr;
       }
     }
+    if (res.status === 401) {
+      try {
+        const json = JSON.parse(text);
+        const d = json.detail;
+        const msg = typeof d === "string" ? d : JSON.stringify(d);
+        const err = new Error(msg || "Unauthorized");
+        err.status = 401;
+        throw err;
+      } catch (parseErr) {
+        if (parseErr.status === 401) throw parseErr;
+      }
+    }
     const err = new Error(text || `Request failed: ${res.status}`);
     err.status = res.status;
     throw err;
@@ -52,6 +64,58 @@ export async function createIncident(payload, token) {
     body: JSON.stringify(payload),
     token,
   });
+}
+
+export async function uploadIncidentsZip(file, options = {}, token) {
+  const source = options.source || "upload";
+  const titlePrefix = (options.titlePrefix || "").trim();
+  const params = new URLSearchParams({ source });
+  if (titlePrefix) params.set("title_prefix", titlePrefix);
+
+  const headers = {};
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  const form = new FormData();
+  form.append("archive", file, file.name || "upload.zip");
+
+  const res = await fetch(`${BASE_URL}/api/incidents/bulk-zip?${params.toString()}`, {
+    method: "POST",
+    headers,
+    body: form,
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    if (res.status === 400) {
+      try {
+        const json = JSON.parse(text);
+        const d = json.detail;
+        if (
+          d
+          && typeof d === "object"
+          && !Array.isArray(d)
+          && d.error === "bulk_zip_validation_failed"
+        ) {
+          const lines = [d.message || "ZIP rejected — no incidents were created."];
+          if (Array.isArray(d.failures)) {
+            for (const f of d.failures) {
+              if (f?.file && f?.reason) lines.push(`${f.file}: ${f.reason}`);
+            }
+          }
+          const err = new Error(lines.join("\n"));
+          err.status = 400;
+          throw err;
+        }
+      } catch (e) {
+        if (e.status === 400) throw e;
+      }
+    }
+    const err = new Error(text || `Request failed: ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  return res.json();
 }
 
 export async function fetchRemediationActions(jobId, token) {

@@ -401,6 +401,62 @@ def sanitize_chat_message(text: str) -> tuple[str, GuardrailReport]:
     return sanitize_incident_text(text, max_chars=4000)
 
 
+def prompt_injection_hits_in_text(text: str, *, max_hits: int = 5) -> list[str]:
+    """Return short previews of lines that match prompt-injection heuristics (preflight only)."""
+    hits: list[str] = []
+    clean = text.replace("\x00", " ").replace("\r", "")
+    for line in clean.split("\n"):
+        line_stripped = line.strip()
+        if not line_stripped:
+            continue
+        for pattern in PROMPT_INJECTION_PATTERNS:
+            if re.search(pattern, line_stripped, re.IGNORECASE):
+                preview = line_stripped[:120] + ("…" if len(line_stripped) > 120 else "")
+                hits.append(preview)
+                break
+        if len(hits) >= max_hits:
+            break
+    return hits
+
+
+def bulk_zip_hidden_threat_reason(text: str) -> str | None:
+    """XSS + prompt-injection only (for archive paths we do not ingest as incidents)."""
+    xss = detect_hard_xss(text)
+    if xss:
+        joined = ", ".join(xss[:3])
+        return f"Blocked script/markup patterns ({joined}) in a non-log file inside the ZIP."
+    inj = prompt_injection_hits_in_text(text, max_hits=3)
+    if inj:
+        shown = " | ".join(repr(s) for s in inj)
+        return f"Prompt-injection-like content in a non-log file: {shown}"
+    return None
+
+
+def bulk_zip_member_rejection_reason(text: str) -> str | None:
+    """
+    Preflight one ZIP member for bulk upload (all-or-nothing batch).
+
+    Mirrors ``IncidentInput`` text checks (XSS + log format) and additionally
+    rejects prompt-injection-like lines — bulk uploads do not auto-strip them
+    per file; the whole archive fails instead.
+    """
+    xss = detect_hard_xss(text)
+    if xss:
+        joined = ", ".join(xss[:3])
+        return (
+            f"Embedded script or markup patterns ({joined}). "
+            "Remove HTML/script content from this file."
+        )
+    valid, reasons = validate_log_format(text)
+    if not valid:
+        return " ".join(reasons) if reasons else "Log format validation failed."
+    inj = prompt_injection_hits_in_text(text, max_hits=3)
+    if inj:
+        shown = " | ".join(repr(s) for s in inj)
+        return f"Prompt-injection-like content: {shown}"
+    return None
+
+
 def extract_evidence_snippets(text: str, max_snippets: int = 6) -> list[str]:
     """Extract evidence-like log lines to ground downstream reasoning."""
 

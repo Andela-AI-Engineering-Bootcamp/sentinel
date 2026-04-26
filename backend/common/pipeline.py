@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 
 from common.config import active_model
 from common.models import IncidentAnalysis, IncidentInput, JobRunResponse
@@ -15,6 +16,16 @@ from remediator.agent import generate_remediation
 from summarizer.agent import summarize_incident
 
 logger = logging.getLogger(__name__)
+
+_VALID_SEVERITIES = frozenset({"low", "medium", "high", "critical"})
+
+
+def _integration_notify_severities() -> frozenset[str]:
+    """Comma-separated severities that trigger outbound integrations (default: high,critical)."""
+    raw = os.getenv("INTEGRATION_NOTIFY_SEVERITIES", "high,critical")
+    parts = {p.strip().lower() for p in raw.split(",") if p.strip()}
+    chosen = parts & _VALID_SEVERITIES
+    return frozenset(chosen) if chosen else frozenset({"high", "critical"})
 
 
 def run_job(
@@ -138,6 +149,8 @@ def run_job(
                 analysis,
                 db,
                 clerk_user_id or row.get("clerk_user_id") or "anonymous",
+                incident_title=str(row.get("title") or "").strip(),
+                incident_source=str(row.get("source") or "").strip(),
             )
         except Exception:  # noqa: BLE001
             logger.warning("Integration dispatch failed; continuing")
@@ -169,18 +182,34 @@ def run_job(
 
 
 def _fire_integrations(
-    job_id: str, analysis: "IncidentAnalysis", db: Database, clerk_user_id: str
+    job_id: str,
+    analysis: "IncidentAnalysis",
+    db: Database,
+    clerk_user_id: str,
+    *,
+    incident_title: str = "",
+    incident_source: str = "",
 ) -> None:
-    """Dispatch configured integrations if analysis severity warrants it."""
+    """Dispatch configured integrations if analysis severity warrants it.
+
+    Pass ``incident_title`` / ``incident_source`` from the job row (``get_job_with_incident``)
+    so webhooks always get the correct label without a second DB lookup that can fail on
+    tenant id mismatches (e.g. Lambda ``run_job(job_id, db)`` with no Clerk context).
+    """
     from integrations.dispatcher import dispatch_all
 
     integrations = db.list_integrations(clerk_user_id)
     if not integrations:
         return
     severity = analysis.summary.severity
-    if severity not in ("high", "critical"):
+    if severity not in _integration_notify_severities():
         return
-    dispatch_all(integrations, analysis)
+    dispatch_all(
+        integrations,
+        analysis,
+        incident_title=incident_title,
+        incident_source=incident_source,
+    )
 
 
 def create_incident_and_job(

@@ -7,20 +7,25 @@ try:
 except ImportError:  # pragma: no cover - optional for local dev only
     load_dotenv = None
 
+from pathlib import Path
+
 import asyncio
+import io
 import json
 import logging
 import os
+import zipfile
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel as _Base
 
 from api.auth import AuthContext, get_user_entitlements, require_auth, require_feature
 from common.liveops import list_live_board_data, refresh_live_board
+from common.guardrails import bulk_zip_hidden_threat_reason, bulk_zip_member_rejection_reason
 from common.log_stats import compute_log_stats
 from common.models import (
     ActionChatRequest,
@@ -50,7 +55,17 @@ from investigator.agent import parse_streamed_root_cause, stream_investigation_t
 logger = logging.getLogger(__name__)
 
 if load_dotenv is not None:
-    load_dotenv()
+    # When uvicorn cwd is `backend/`, default load_dotenv() only reads backend/.env.
+    # Prefer repo-root `.env` (same file `scripts/run_local.py` documents).
+    _api_dir = Path(__file__).resolve().parent
+    # Prefer repo-root `.env`, then `backend/.env` (if present).
+    for _base in (_api_dir.parents[2], _api_dir.parents[1]):
+        _env = _base / ".env"
+        if _env.is_file():
+            load_dotenv(_env)
+            break
+    else:
+        load_dotenv()
 
 
 app = FastAPI(title="Sentinel API", version="0.3.0")
@@ -453,6 +468,179 @@ def analyze_sync(
         )
         result = run_job(job_id, db, clerk_user_id=user.user_id)
         return result.model_dump()
+    finally:
+        db.close()
+
+
+def _decode_zip_member(raw: bytes) -> str | None:
+    """Decode zip payload into text; return None for unsupported encodings."""
+    for encoding in ("utf-8", "utf-8-sig", "utf-16", "latin-1"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return None
+
+
+def _zip_entry_is_macos_metadata(norm_path: str, leaf_name: str) -> bool:
+    """True for Finder resource-fork noise — still scanned for threats, never ingested."""
+    return "__MACOSX" in norm_path or leaf_name.startswith("._")
+
+
+# Cap ZIP entry count before reading bodies — avoids huge archives exhausting CPU/memory.
+_BULK_ZIP_MAX_MEMBER_FILES = 400
+
+
+@app.post("/api/incidents/bulk-zip")
+async def create_incidents_bulk_zip(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    source: str = Query(default="upload", max_length=100),
+    title_prefix: str | None = Query(default=None, max_length=120),
+    max_files: int = Query(default=25, ge=1, le=100),
+    user: AuthContext = Depends(require_auth),
+) -> dict[str, Any]:
+    """Create multiple incidents/jobs from a zip archive of text-like files.
+
+    Accepts either:
+    - ``multipart/form-data`` with a file field named ``archive`` (browser / UI), or
+    - Raw body with ``Content-Type: application/zip`` (or octet-stream) for scripts/curl.
+    """
+    ct = (request.headers.get("content-type") or "").lower()
+    if "multipart/form-data" in ct:
+        form = await request.form()
+        up = form.get("archive")
+        if up is None:
+            raise HTTPException(
+                status_code=400,
+                detail='Multipart upload must include a file field named "archive".',
+            )
+        try:
+            zip_bytes = await up.read()
+        except (AttributeError, TypeError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail='Field "archive" must be a file upload.',
+            ) from exc
+    else:
+        zip_bytes = await request.body()
+    if not zip_bytes:
+        raise HTTPException(status_code=400, detail="Empty upload.")
+
+    allowed_ext = {".txt", ".log", ".json", ".ndjson", ".md", ".csv"}
+    created: list[dict[str, str]] = []
+    skipped: list[dict[str, str]] = []
+    queued = 0
+    db = _db()
+    try:
+        try:
+            zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+        except zipfile.BadZipFile as exc:
+            raise HTTPException(status_code=400, detail="Invalid zip archive.") from exc
+
+        with zf:
+            members = [m for m in zf.infolist() if not m.is_dir()]
+            if not members:
+                raise HTTPException(status_code=400, detail="Zip file contains no files.")
+            if len(members) > _BULK_ZIP_MAX_MEMBER_FILES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"ZIP contains too many entries ({len(members)}). "
+                        f"Maximum {_BULK_ZIP_MAX_MEMBER_FILES} files per archive."
+                    ),
+                )
+
+            # Decode every small text-like member for (1) whole-archive guardrails
+            # including paths we do not ingest (e.g. __MACOSX — must still scan for injection),
+            # then (2) pick ingest candidates.
+            sweep_rows: list[tuple[str, str, str, str, bool]] = []
+            for member in members:
+                norm_path = member.filename.replace("\\", "/")
+                name = norm_path.rsplit("/", 1)[-1]
+                if not name:
+                    skipped.append({"file": member.filename, "reason": "invalid_name"})
+                    continue
+                is_metadata = _zip_entry_is_macos_metadata(norm_path, name)
+                if member.file_size > 500_000:
+                    skipped.append({"file": name, "reason": "file_too_large"})
+                    continue
+                raw = zf.read(member)
+                text = _decode_zip_member(raw)
+                if not text:
+                    skipped.append({"file": name, "reason": "decode_failed"})
+                    continue
+                ext = os.path.splitext(name.lower())[1]
+                sweep_rows.append((norm_path, name, text, ext, is_metadata))
+
+            if not sweep_rows:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Zip contains no readable text files under the size limit.",
+                )
+
+            preflight_failures: list[dict[str, str]] = []
+            for norm_path, name, text, ext, is_metadata in sweep_rows:
+                if is_metadata:
+                    reason = bulk_zip_hidden_threat_reason(text)
+                elif ext in allowed_ext:
+                    reason = bulk_zip_member_rejection_reason(text)
+                else:
+                    reason = bulk_zip_hidden_threat_reason(text)
+                if reason:
+                    preflight_failures.append({"file": norm_path, "reason": reason})
+            if preflight_failures:
+                logger.warning(
+                    "bulk_zip preflight rejected archive: %s",
+                    preflight_failures,
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "bulk_zip_validation_failed",
+                        "message": "ZIP rejected — no incidents were created. Fix or remove the listed file(s) and try again.",
+                        "failures": preflight_failures,
+                    },
+                )
+
+            candidates: list[tuple[str, str]] = []
+            for norm_path, name, text, ext, is_metadata in sweep_rows:
+                if is_metadata:
+                    skipped.append({"file": norm_path, "reason": "metadata_file"})
+                    continue
+                if ext not in allowed_ext:
+                    skipped.append({"file": name, "reason": "unsupported_extension"})
+                    continue
+                if len(candidates) >= max_files:
+                    skipped.append({"file": name, "reason": "max_files_reached"})
+                    continue
+                candidates.append((name, text))
+
+            for name, text in candidates:
+                title_base = name[:180]
+                title = (
+                    f"{title_prefix.strip()} - {title_base}"
+                    if title_prefix and title_prefix.strip()
+                    else title_base
+                )
+                payload = IncidentInput(text=text, title=title, source=source)
+                incident_id, job_id = create_incident_and_job(
+                    payload, db, clerk_user_id=user.user_id
+                )
+                background_tasks.add_task(_background_run_job, job_id, user.user_id)
+                created.append({"file": name, "incident_id": incident_id, "job_id": job_id})
+                queued += 1
+
+        if not created:
+            reasons = ", ".join(f"{x['file']}:{x['reason']}" for x in skipped[:5]) or "No supported files found."
+            raise HTTPException(status_code=400, detail=f"No incidents queued. {reasons}")
+
+        return {
+            "queued": len(created),
+            "created": created,
+            "skipped": skipped,
+            "max_files": max_files,
+        }
     finally:
         db.close()
 

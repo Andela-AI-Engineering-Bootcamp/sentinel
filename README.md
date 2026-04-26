@@ -71,6 +71,8 @@ Deeper reference: [guides/architecture.md](guides/architecture.md), [guides/agen
 - [Running locally](#running-locally)
 - [API overview](#api-overview)
 - [Frontend](#frontend)
+- [Bulk ZIP upload](#bulk-zip-upload)
+- [Slack and generic webhooks](#slack-and-generic-webhooks)
 - [Tests](#tests)
 - [AWS deployment](#aws-deployment)
 - [Documentation](#documentation)
@@ -92,7 +94,8 @@ Production incidents rarely arrive as clean stories. Operators paste logs, paste
 - **Real-time feedback**: Server-Sent Events for pipeline stages and investigation streaming (see [API overview](#api-overview)).
 - **Remediation workflow**: Track actions, per-action chat for guidance, follow-ups, and clarification Q&A.
 - **Reporting**: JSON/PDF exports, audit PDFs, periodic digests, post-incident review (PIR) helpers.
-- **Integrations & webhooks**: Alertmanager / CloudWatch-style ingestion hooks, optional email reminders (Resend).
+- **Integrations & webhooks**: Alertmanager / CloudWatch-style **ingestion** hooks, optional email reminders (Resend), and **outbound** notifications (**Slack** incoming webhooks and **generic HTTP webhooks**) when analysis completes at high or critical severity (see [Slack and generic webhooks](#slack-and-generic-webhooks)).
+- **Bulk ZIP upload**: Upload a `.zip` of log-like files from **Analyze** to create many incidents and jobs in one step, with archive-wide guardrails (see [Bulk ZIP upload](#bulk-zip-upload)).
 - **Auth**: [Clerk](https://clerk.com/) for production-style sign-in; local bypass when Clerk is not configured.
 
 ---
@@ -175,6 +178,15 @@ Copy [.env.example](.env.example) to `.env` at the repo root. Important groups:
 - `S3_BUCKET` for uploads / PDF flows that use S3.
 - `DEFAULT_AWS_REGION`, account and access keys as needed for Bedrock or S3.
 
+### Outbound integrations (Slack / webhooks)
+
+These control **when** and **where** completed analysis is pushed after a job finishes (not ingestion of external alerts):
+
+- **`INTEGRATION_NOTIFY_SEVERITIES`** — Comma-separated list of severities that trigger dispatch (default: `high,critical`). Example: `high,critical` or `critical` only.
+- **`SENTINEL_PUBLIC_URL`** or **`NEXT_PUBLIC_APP_URL`** — Public dashboard base URL (no trailing slash). When set, generic webhook payloads include a **`dashboard_url`** pointing at the job; when unset, `dashboard_url` is `null`.
+
+Integrations themselves are stored per user in the database and configured in the UI under **Settings** (see [Slack and generic webhooks](#slack-and-generic-webhooks)).
+
 For narrative setup instructions, see the **Local Development** section in [intel.md](intel.md).
 
 ---
@@ -214,12 +226,12 @@ Base URL in local development: `http://localhost:8000`
 | Area | Examples |
 |------|----------|
 | **Core** | `GET /health`, `GET /api/me`, `GET /api/team/members` |
-| **Incidents & jobs** | `POST /api/incidents`, `POST /api/incidents/analyze-sync`, `GET /api/jobs`, `GET /api/jobs/{job_id}`, `POST /api/jobs/{job_id}/run`, `GET /api/jobs/{job_id}/workflow` |
+| **Incidents & jobs** | `POST /api/incidents`, `POST /api/incidents/analyze-sync`, `POST /api/incidents/bulk-zip` (multipart field **`archive`**, optional query `title_prefix`, `source`, `max_files`), `GET /api/jobs`, `GET /api/jobs/{job_id}`, `POST /api/jobs/{job_id}/run`, `GET /api/jobs/{job_id}/workflow` |
 | **Streaming** | `GET /api/jobs/{job_id}/stream`, `POST /api/stream/investigate` |
 | **Exports** | `GET /api/jobs/{job_id}/export`, `GET /api/jobs/{job_id}/audit/pdf` |
 | **Remediation** | `GET/PATCH .../actions`, chat `GET/POST .../actions/{action_id}/chat`, `POST .../actions/{action_id}/evaluate` |
 | **Follow-ups & clarify** | follow-ups under `/api/jobs/{job_id}/follow-ups`, clarifications under `/api/jobs/{job_id}/clarify` |
-| **Integrations** | `GET/POST /api/integrations`, webhooks under `/api/ingest/webhook*` |
+| **Integrations** | `GET/POST/DELETE /api/integrations` (Slack, generic webhook, Jira, PagerDuty configs); **ingestion** webhooks under `/api/ingest/webhook*` |
 | **Analytics & reports** | `GET /api/analytics/mttr`, `POST /api/reports/digest`, PIR routes under `/api/jobs/{job_id}/pir` |
 
 Interactive docs: when the API is running, OpenAPI is available at `/docs` (Swagger UI) unless disabled in your build.
@@ -232,13 +244,67 @@ Next.js **Pages Router** app (`frontend/pages/`):
 
 | Route | Purpose |
 |-------|---------|
-| `/` | Analyze: submit incident text |
+| `/` | Analyze: paste incident text or **Upload ZIP (bulk)** for many jobs from one archive |
 | `/dashboard` | Jobs, stats, analysis detail |
 | `/audit` | Audit-oriented views |
 | `/settings` | Integrations and preferences |
 | `/sign-in`, `/sign-up` | Clerk auth |
 
 The UI calls the API at **`NEXT_PUBLIC_API_URL`** when set; otherwise it defaults to `http://localhost:8000` (see [frontend/lib/api.js](frontend/lib/api.js)). With `run_local.py`, you can put `NEXT_PUBLIC_*` and Clerk keys in the **root** `.env`. If you run `npm run dev` alone, you can instead use **`frontend/.env.local`** (see [frontend/README.md](frontend/README.md)).
+
+---
+
+## Bulk ZIP upload
+
+Use this when you have many small log files (for example per-service `.txt` or `.log` exports) and want one **incident + job per member file** without pasting each by hand.
+
+### In the UI
+
+On **`/`** (Analyze), choose **Upload ZIP (bulk)**. The client sends `multipart/form-data` with the file in field **`archive`** to `POST /api/incidents/bulk-zip`. The page shows **Bulk Upload Results** (created jobs, skipped members) and lets you open each job in the analysis panel.
+
+### API behavior
+
+| Topic | Detail |
+|--------|--------|
+| **Endpoint** | `POST /api/incidents/bulk-zip` |
+| **Multipart** | Form field name must be **`archive`** (see [backend/test_bulk_zip_api.py](backend/test_bulk_zip_api.py)). |
+| **Raw body** | You may instead POST the raw ZIP bytes with `Content-Type: application/zip` (or `application/octet-stream`) for scripts. |
+| **Query** | `source` (default `upload`), optional `title_prefix` (prepended to each incident title), `max_files` (default **25**, max **100**). |
+| **Archive size (entries)** | Archives with more than **400** file entries are rejected (**400**) before reading bodies, to bound CPU/memory on pathological zips. |
+| **Ingested extensions** | `.txt`, `.log`, `.json`, `.ndjson`, `.md`, `.csv` |
+| **Per-file size** | Members larger than **500 KB** are skipped (not ingested). |
+| **Finder metadata** | Paths under **`__MACOSX`** and AppleDouble `._*` files are not ingested as incidents but are **still scanned** for hidden threats; a bad payload there fails the **whole** archive. |
+| **Preflight** | If any scanned member fails guardrails (for example prompt-injection-like content in a log line), the API returns **400** with `detail.error === "bulk_zip_validation_failed"` and a **`failures`** list — **no** incidents are created (all-or-nothing). |
+
+Automated coverage: [backend/common/test_bulk_zip_preflight.py](backend/common/test_bulk_zip_preflight.py), [backend/test_bulk_zip_api.py](backend/test_bulk_zip_api.py).
+
+---
+
+## Slack and generic webhooks
+
+Sentinel can notify external systems when a job’s analysis completes, for severities configured by **`INTEGRATION_NOTIFY_SEVERITIES`** (see [Configuration](#configuration)).
+
+### Configure in the app
+
+1. Open **`/settings`** while signed in (or in local auth-disabled mode as your dev user).
+2. Under **Add Integration**, pick **Slack** or **Generic Webhook** and paste the webhook URL.
+3. Save. Other types (Jira, PagerDuty) may be present in the same list; this section focuses on Slack and HTTP JSON webhooks.
+
+**Slack:** Use a real [Incoming Webhook](https://api.slack.com/messaging/webhooks) URL (`https://hooks.slack.com/services/...` with three path segments). Do not paste documentation placeholders that use a Unicode ellipsis (`…`) in the path — the API rejects those because Slack responds with redirects, not a successful post.
+
+### Generic webhook payload
+
+The server `POST`s JSON to your URL. Top-level fields include:
+
+- **`event`**: `sentinel.analysis.completed`
+- **`incident_id`**, **`job_id`**
+- **`incident_title`**, **`incident_source`** — Title is typically the incident label (for bulk ZIP, often `title_prefix` + member file name); source is usually `upload` or `manual`.
+- **`severity`**, **`summary`**, **`severity_reason`**, root cause fields, **`recommended_actions`**, **`next_checks`**, **`risk_if_unresolved`**
+- **`dashboard_url`** — Absolute link when `SENTINEL_PUBLIC_URL` / `NEXT_PUBLIC_APP_URL` is set; otherwise `null`.
+
+**Manual smoke test** (from `backend/`): `WEBHOOK_URL=https://… uv run python -m integrations.manual_dispatch` (optional `INTEGRATION_TYPE=slack`, `INCIDENT_TITLE`, `INCIDENT_SOURCE`).
+
+Dispatch runs from the same **`run_job`** path used locally and on **Lambda**. Packaging scripts include `common/` and `integrations/` but **skip** `test_*.py` / `*_test.py` so pytest modules are not shipped in deployment zips. After changing integration code, **redeploy** the Lambdas that run the pipeline (see [AWS deployment](#aws-deployment)).
 
 ---
 
@@ -284,7 +350,7 @@ Infrastructure is organized as **independent Terraform stages** under [terraform
 | Eben and Michael | Backend and frontend: APIs, agent pipeline, and dashboard UI |
 | Joshua | Deployment: AWS, Terraform stages, and end-to-end infrastructure delivery |
 | Tunde | Demo presentation |
-| Ayesha | Base codebase setup, repository documentation, and test engineering: end-to-end scenarios, regression, and smoke coverage from API ingestion through completed jobs in the dashboard |
+| Ayesha | Base codebase setup and repository documentation; **bulk ZIP upload** (API preflight guardrails, Analyze UI, job table); **Slack** and **generic webhook** outbound integrations (payload fields, severity-based dispatch, dashboard links); test engineering including bulk ZIP and dispatcher coverage |
 | Oluwagbamila | End-to-end application: full product flow from incident intake through analysis to dashboard delivery |
 
 ---

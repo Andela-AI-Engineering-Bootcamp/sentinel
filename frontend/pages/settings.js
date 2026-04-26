@@ -96,6 +96,10 @@ function SettingsContent({ tokenProvider = null }) {
   const load = useCallback(async () => {
     try {
       const token = tokenProvider ? await tokenProvider() : null;
+      if (tokenProvider && !token) {
+        setError("Could not get a session token. Try refreshing the page, or sign out and sign in again.");
+        return;
+      }
       const data = await fetchIntegrations(token);
       setIntegrations(data);
     } catch (err) {
@@ -107,6 +111,10 @@ function SettingsContent({ tokenProvider = null }) {
 
   async function handleSave(payload) {
     const token = tokenProvider ? await tokenProvider() : null;
+    if (tokenProvider && !token) {
+      setError("Could not get a session token. Try refreshing the page.");
+      return;
+    }
     await saveIntegration(payload, token);
     await load();
   }
@@ -114,6 +122,10 @@ function SettingsContent({ tokenProvider = null }) {
   async function handleDelete(id) {
     try {
       const token = tokenProvider ? await tokenProvider() : null;
+      if (tokenProvider && !token) {
+        setError("Could not get a session token. Try refreshing the page.");
+        return;
+      }
       await deleteIntegration(id, token);
       setIntegrations((prev) => prev.filter((i) => i.id !== id));
     } catch (err) {
@@ -192,7 +204,74 @@ function SettingsContent({ tokenProvider = null }) {
 }
 
 function AuthenticatedSettings() {
-  const { getToken } = useAuth();
+  const { getToken, isLoaded, isSignedIn } = useAuth();
+  const [sessionReady, setSessionReady] = useState(false);
+  const [prepError, setPrepError] = useState("");
+
+  // `isLoaded` alone is not always enough: `getToken()` can briefly return null right after.
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn) {
+      setSessionReady(false);
+      setPrepError("");
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const t = await getToken();
+        if (cancelled) return;
+        if (t) {
+          setSessionReady(true);
+          setPrepError("");
+        } else {
+          setSessionReady(false);
+          setPrepError("Clerk did not return an API token. Check Clerk Dashboard → JWT templates and try signing out and back in.");
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setSessionReady(false);
+          setPrepError(e?.message || "Could not load a session token from Clerk.");
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoaded, isSignedIn, getToken]);
+
+  if (!isLoaded) {
+    return (
+      <AppShell activeHref="/settings">
+        <header className="page-header">
+          <div>
+            <p className="eyebrow">Configuration</p>
+            <h1 className="page-title">Settings</h1>
+            <p className="page-sub muted">Loading your session…</p>
+          </div>
+        </header>
+      </AppShell>
+    );
+  }
+
+  if (!isSignedIn) {
+    return <RedirectToSignIn />;
+  }
+
+  if (!sessionReady) {
+    return (
+      <AppShell activeHref="/settings">
+        <header className="page-header">
+          <div>
+            <p className="eyebrow">Configuration</p>
+            <h1 className="page-title">Settings</h1>
+            <p className="page-sub muted">Preparing your secure session…</p>
+          </div>
+        </header>
+        {prepError ? <p className="error compact" style={{ marginTop: 16 }}>{prepError}</p> : null}
+      </AppShell>
+    );
+  }
+
   return <SettingsContent tokenProvider={getToken} />;
 }
 

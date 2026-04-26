@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
+/** Legacy key — removed on load so full reload always starts a clean Analyze form. */
 const STORAGE_KEY = "sentinel-analyze-session";
 
 const defaultDraft = {
@@ -7,23 +8,6 @@ const defaultDraft = {
   source: "manual",
   text: "",
 };
-
-function readStored() {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = sessionStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return {
-      result: parsed.result ?? null,
-      pipelineEvents: Array.isArray(parsed.pipelineEvents) ? parsed.pipelineEvents : [],
-      error: typeof parsed.error === "string" ? parsed.error : "",
-      draft: { ...defaultDraft, ...(parsed.draft && typeof parsed.draft === "object" ? parsed.draft : {}) },
-    };
-  } catch {
-    return null;
-  }
-}
 
 const AnalyzeSessionContext = createContext(null);
 
@@ -35,27 +19,15 @@ export function AnalyzeSessionProvider({ children }) {
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
-    const s = readStored();
-    if (s) {
-      setResult(s.result);
-      setPipelineEvents(s.pipelineEvents);
-      setError(s.error);
-      setDraftState(s.draft);
+    if (typeof window !== "undefined") {
+      try {
+        sessionStorage.removeItem(STORAGE_KEY);
+      } catch {
+        /* noop */
+      }
     }
     setHydrated(true);
   }, []);
-
-  useEffect(() => {
-    if (!hydrated || typeof window === "undefined") return;
-    try {
-      sessionStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify({ result, pipelineEvents, error, draft }),
-      );
-    } catch {
-      /* ignore quota or JSON errors */
-    }
-  }, [hydrated, result, pipelineEvents, error, draft]);
 
   const updateDraft = useCallback((partial) => {
     setDraftState((d) => ({ ...d, ...partial }));
