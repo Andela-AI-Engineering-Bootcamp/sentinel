@@ -15,16 +15,6 @@ BACKEND_ROOT = ROOT.parent
 ZIP_PATH = ROOT / "api_lambda.zip"
 DOCKER_IMAGE = "public.ecr.aws/lambda/python:3.12"
 DOCKER_PLATFORM = "linux/amd64"
-SOURCE_DIRS = [
-    "api",
-    "common",
-    "integrations",
-    "normalizer",
-    "summarizer",
-    "investigator",
-    "remediator",
-    "reports",
-]
 SKIP_DIRS = {"__pycache__", ".venv"}
 SKIP_SUFFIXES = {".pyc", ".pyo"}
 
@@ -41,11 +31,24 @@ def _copy_ignore(dirpath: str, names: list[str]) -> list[str]:
             ignored.append(name)
             continue
         path = base / name
-        if path.suffix == ".py":
+        if path.is_file():
+            if path.suffix != ".py":
+                ignored.append(name)
+                continue
             stem = path.stem
             if name.startswith("test_") or stem.endswith("_test"):
                 ignored.append(name)
     return ignored
+
+
+def _source_dirs() -> list[str]:
+    return sorted(
+        path.name
+        for path in BACKEND_ROOT.iterdir()
+        if path.is_dir()
+        and path.name not in SKIP_DIRS
+        and (path / "__init__.py").exists()
+    )
 
 
 def _dependencies() -> list[str]:
@@ -77,7 +80,7 @@ def _docker_build(target_dir: Path) -> None:
 
 
 def _copy_sources(target_dir: Path) -> None:
-    for source_name in SOURCE_DIRS:
+    for source_name in _source_dirs():
         src = BACKEND_ROOT / source_name
         dst = target_dir / source_name
         shutil.copytree(
