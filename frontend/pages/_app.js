@@ -7,17 +7,37 @@ import "../styles/globals.css";
 
 const clerkEnabled = isClerkEnabled();
 
-function AppProviders({ children, tokenProvider = null }) {
+function AppProviders({
+  children,
+  tokenProvider = null,
+  authLoaded = true,
+  signedIn = true,
+  authUserId = "local",
+}) {
   return (
-    <EntitlementProvider tokenProvider={tokenProvider}>
+    <EntitlementProvider
+      tokenProvider={tokenProvider}
+      authLoaded={authLoaded}
+      signedIn={signedIn}
+      authUserId={authUserId}
+    >
       <AnalyzeSessionProvider>{children}</AnalyzeSessionProvider>
     </EntitlementProvider>
   );
 }
 
 function AuthenticatedProviders({ children }) {
-  const { getToken } = useAuth();
-  return <AppProviders tokenProvider={getToken}>{children}</AppProviders>;
+  const { getToken, isLoaded, isSignedIn, userId } = useAuth();
+  return (
+    <AppProviders
+      tokenProvider={getToken}
+      authLoaded={isLoaded}
+      signedIn={Boolean(isSignedIn)}
+      authUserId={userId || ""}
+    >
+      {children}
+    </AppProviders>
+  );
 }
 
 export default function App({ Component, pageProps }) {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -55,6 +56,12 @@ def is_local_url(url: str) -> bool:
     return lowered.startswith("http://localhost") or lowered.startswith("https://localhost") or "127.0.0.1" in lowered
 
 
+def clear_next_cache() -> None:
+    cache_dir = FRONTEND / ".next" / "cache"
+    if cache_dir.exists():
+        shutil.rmtree(cache_dir)
+
+
 def main() -> None:
     env = os.environ.copy()
     env.update({k: v for k, v in load_dotenv(ROOT / ".env").items() if k not in env})
@@ -75,6 +82,7 @@ def main() -> None:
 
     env["NEXT_PUBLIC_API_URL"] = api_url
     print(f"Building frontend with NEXT_PUBLIC_API_URL={api_url}")
+    clear_next_cache()
     run(["npm", "run", "build"], cwd=FRONTEND, env=env)
 
     dist_id = env.get("SENTINEL_CLOUDFRONT_DISTRIBUTION_ID", "")

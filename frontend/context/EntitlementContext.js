@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 import { fetchCurrentUser } from "../lib/api";
 
@@ -15,11 +15,27 @@ const EntitlementContext = createContext({
   refresh: async () => null,
 });
 
-export function EntitlementProvider({ children, tokenProvider = null }) {
+export function EntitlementProvider({
+  children,
+  tokenProvider = null,
+  authLoaded = true,
+  signedIn = true,
+  authUserId = "local",
+}) {
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  async function loadCurrentUser() {
+  const loadCurrentUser = useCallback(async () => {
+    if (!authLoaded) {
+      setLoading(true);
+      return null;
+    }
+    if (!signedIn) {
+      setCurrentUser(null);
+      setLoading(false);
+      return null;
+    }
+
     setLoading(true);
     try {
       const token = tokenProvider ? await tokenProvider() : null;
@@ -32,13 +48,26 @@ export function EntitlementProvider({ children, tokenProvider = null }) {
     } finally {
       setLoading(false);
     }
-  }
+  }, [authLoaded, signedIn, authUserId, tokenProvider]);
 
   useEffect(() => {
     let cancelled = false;
 
     async function run() {
+      if (!authLoaded) {
+        setCurrentUser(null);
+        setLoading(true);
+        return;
+      }
+
+      if (!signedIn) {
+        setCurrentUser(null);
+        setLoading(false);
+        return;
+      }
+
       setLoading(true);
+      setCurrentUser(null);
       try {
         const token = tokenProvider ? await tokenProvider() : null;
         const user = await fetchCurrentUser(token);
@@ -60,7 +89,7 @@ export function EntitlementProvider({ children, tokenProvider = null }) {
     return () => {
       cancelled = true;
     };
-  }, [tokenProvider]);
+  }, [authLoaded, signedIn, authUserId, tokenProvider]);
 
   const value = useMemo(() => {
     const features = currentUser?.features || DEFAULT_FEATURES;
@@ -72,7 +101,7 @@ export function EntitlementProvider({ children, tokenProvider = null }) {
       hasFeature: (name) => Boolean(features?.[name]),
       refresh: loadCurrentUser,
     };
-  }, [currentUser, loading]);
+  }, [currentUser, loadCurrentUser, loading]);
 
   return <EntitlementContext.Provider value={value}>{children}</EntitlementContext.Provider>;
 }
