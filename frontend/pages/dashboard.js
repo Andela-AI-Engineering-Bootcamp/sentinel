@@ -280,6 +280,7 @@ function DashboardContent({ tokenProvider = null }) {
 
   const loadJobs = useCallback(async () => {
     setLoadingJobs(true);
+    setError("");
     try {
       const token = tokenProvider ? await tokenProvider() : null;
       const rows = await fetchJobs(20, token);

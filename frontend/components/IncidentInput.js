@@ -95,8 +95,6 @@ export default function IncidentInput({
     onAnalyze({ title: draft.title.trim(), source: draft.source, text: draft.text.trim() });
   }
 
-
-
   const showWarning = contentWarning && !acknowledged;
 
   // Overall severity is the worst level across all issues.
@@ -153,7 +151,7 @@ export default function IncidentInput({
           <option value="upload">File upload</option>
         </select>
       </label>
-      {(draft.source === "manual" || (draft.source === "upload" && draft.text)) && (
+      {(draft.source === "manual" || draft.source === "upload") && (
         <label>
           {draft.source === "upload" ? "File Content" : "Paste Logs / Incident Text"}
           <textarea
@@ -177,7 +175,6 @@ export default function IncidentInput({
           />
         </label>
       )}
-
 
       {showWarning && (
         <div

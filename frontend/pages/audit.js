@@ -36,6 +36,7 @@ function AuditContent({ tokenProvider = null }) {
 
   const loadJobs = useCallback(async () => {
     setLoadingJobs(true);
+    setErr("");
     try {
       const token = tokenProvider ? await tokenProvider() : null;
       const rows = await fetchJobs(50, token);

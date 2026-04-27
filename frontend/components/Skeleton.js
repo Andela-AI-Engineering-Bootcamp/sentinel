@@ -8,9 +8,9 @@ export function Skeleton({ className = '', style = {} }) {
   return <div className={`skeleton ${className}`} style={style} />;
 }
 
-export function SkeletonText({ lines = 3, className = '' }) {
+export function SkeletonText({ lines = 3, className = '', style = {}, ...props }) {
   return (
-    <div className={`skeleton-container ${className}`}>
+    <div className={`skeleton-container ${className}`} style={style} {...props}>
       {Array.from({ length: lines }).map((_, i) => (
         <Skeleton 
           key={i} 
@@ -22,16 +22,16 @@ export function SkeletonText({ lines = 3, className = '' }) {
   );
 }
 
-export function SkeletonTitle({ className = '' }) {
-  return <Skeleton className={`skeleton-title ${className}`} />;
+export function SkeletonTitle({ className = '', ...props }) {
+  return <Skeleton className={`skeleton-title ${className}`} {...props} />;
 }
 
-export function SkeletonRect({ height = 100, className = '' }) {
-  return <Skeleton className={`skeleton-rect ${className}`} style={{ height }} />;
+export function SkeletonRect({ height = 100, className = '', style = {}, ...props }) {
+  return <Skeleton className={`skeleton-rect ${className}`} style={{ height, ...style }} {...props} />;
 }
 
-export function SkeletonCircle({ size = 40, className = '' }) {
-  return <Skeleton className={`skeleton-circle ${className}`} style={{ width: size, height: size }} />;
+export function SkeletonCircle({ size = 40, className = '', style = {}, ...props }) {
+  return <Skeleton className={`skeleton-circle ${className}`} style={{ width: size, height: size, ...style }} {...props} />;
 }
 
 export default Skeleton;

@@ -110,6 +110,7 @@ function SettingsContent({ tokenProvider = null }) {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setError("");
     try {
       const token = tokenProvider ? await tokenProvider() : null;
       if (tokenProvider && !token) {
@@ -128,6 +129,7 @@ function SettingsContent({ tokenProvider = null }) {
   useEffect(() => { load(); }, [load]);
 
   async function handleSave(payload) {
+    setError("");
     const token = tokenProvider ? await tokenProvider() : null;
     if (tokenProvider && !token) {
       setError("Could not get a session token. Try refreshing the page.");
@@ -138,6 +140,7 @@ function SettingsContent({ tokenProvider = null }) {
   }
 
   async function handleDelete(id) {
+    setError("");
     try {
       const token = tokenProvider ? await tokenProvider() : null;
       if (tokenProvider && !token) {

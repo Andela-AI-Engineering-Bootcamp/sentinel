@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import AppShell from "../components/AppShell";
 import FeatureLockedCard from "../components/FeatureLockedCard";
-import { SkeletonRect, SkeletonText, SkeletonTitle } from "../components/Skeleton";
+import { SkeletonRect } from "../components/Skeleton";
 import { useEntitlements } from "../context/EntitlementContext";
 import { fetchLiveBoard, refreshLiveBoard, updateLiveConfig } from "../lib/api";
 import { isClerkEnabled } from "../lib/clerk";

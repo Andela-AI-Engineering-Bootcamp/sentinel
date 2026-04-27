@@ -35,6 +35,7 @@ function ReplayContent({ tokenProvider = null }) {
 
   const loadJobs = useCallback(async () => {
     setLoadingJobs(true);
+    setErr("");
     try {
       const token = tokenProvider ? await tokenProvider() : null;
       const rows = await fetchJobs(50, token);
@@ -75,6 +76,7 @@ function ReplayContent({ tokenProvider = null }) {
   async function onExplainFrame(frameIndex) {
     if (!jobId) return;
     setExplainingIndex(frameIndex);
+    setErr("");
     try {
       const token = tokenProvider ? await tokenProvider() : null;
       const res = await explainReplayFrame(jobId, frameIndex, token);
