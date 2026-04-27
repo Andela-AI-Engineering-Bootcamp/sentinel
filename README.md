@@ -349,7 +349,6 @@ Infrastructure is organized as **independent Terraform stages** under [terraform
 | Joshua | Deployment: AWS, Terraform stages, and end-to-end infrastructure delivery |
 | Tunde | Demo presentation, End-to-end incident compare (two completed jobs),Pipeline replay (time-ordered frame playback + per-frame “explain” via the LLM), wired through FastAPI and the Next.js app. |
 | Ayesha | Base codebase setup and repository documentation; **bulk ZIP upload** (API preflight guardrails, Analyze UI, job table); **Slack** and **generic webhook** outbound integrations (payload fields, severity-based dispatch, dashboard links); test engineering including bulk ZIP and dispatcher coverage |
-| Oluwagbamila | End-to-end application: full product flow from incident intake through analysis to dashboard delivery |
 
 ---
 
