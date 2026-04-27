@@ -1,5 +1,12 @@
 terraform {
   required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
 }
 
 provider "aws" {
@@ -180,6 +187,7 @@ resource "aws_lambda_function" "api" {
       AURORA_CLUSTER_ARN = data.terraform_remote_state.database.outputs.aurora_cluster_arn
       AURORA_SECRET_ARN  = data.terraform_remote_state.database.outputs.aurora_secret_arn
       AURORA_DATABASE    = data.terraform_remote_state.database.outputs.database_name
+      AURORA_CLUSTER_ENDPOINT = data.terraform_remote_state.database.outputs.aurora_cluster_endpoint
       DEFAULT_AWS_REGION = var.aws_region
 
       # SQS configuration from Part 6

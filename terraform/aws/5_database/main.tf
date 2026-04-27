@@ -37,17 +37,17 @@ resource "random_password" "db_password" {
   override_special = "!#$%&*()-_=+[]{}<>:?"
 }
 
-resource "aws_security_group" "aurora" {
-  name        = "sentinel-aurora-sg"
-  description = "Security group for Sentinel Aurora"
+resource "aws_security_group" "rds" {
+  name        = "sentinel-rds-sg"
+  description = "Security group for Sentinel RDS"
   vpc_id      = data.aws_vpc.default.id
 
-  # Allow PostgreSQL access from within VPC
+  # Allow PostgreSQL access from anywhere (for Lambda non-VPC access)
   ingress {
     from_port   = 5432
     to_port     = 5432
     protocol    = "tcp"
-    cidr_blocks = [data.aws_vpc.default.cidr_block]
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {
@@ -63,8 +63,8 @@ resource "aws_security_group" "aurora" {
   }
 }
 
-resource "aws_db_subnet_group" "aurora" {
-  name       = "sentinel-aurora-subnet-group"
+resource "aws_db_subnet_group" "rds" {
+  name       = "sentinel-rds-subnet-group"
   subnet_ids = data.aws_subnets.default.ids
 
   tags = {
@@ -75,7 +75,7 @@ resource "aws_db_subnet_group" "aurora" {
 
 # Secrets Manager secret for database credentials
 resource "aws_secretsmanager_secret" "db_credentials" {
-  name                    = "sentinel-aurora-credentials-${random_id.suffix.hex}"
+  name                    = "sentinel-rds-credentials-${random_id.suffix.hex}"
   recovery_window_in_days = 0  # For development - immediate deletion
   
   tags = {
@@ -96,51 +96,36 @@ resource "aws_secretsmanager_secret_version" "db_credentials" {
   })
 }
 
-resource "aws_rds_cluster" "aurora" {
-  cluster_identifier      = var.cluster_identifier
-  engine                  = "aurora-postgresql"
-  engine_mode             = "provisioned"
-  engine_version          = "15.12"
-  database_name           = var.db_name
-  master_username         = var.db_username
-  master_password         = random_password.db_password.result
-  db_subnet_group_name    = aws_db_subnet_group.aurora.name
-  vpc_security_group_ids  = [aws_security_group.aurora.id]
-  storage_encrypted       = true
-  skip_final_snapshot     = true
-  deletion_protection     = false
-  enable_http_endpoint    = true
-
-  serverlessv2_scaling_configuration {
-    min_capacity = var.min_capacity
-    max_capacity = var.max_capacity
-  }
+resource "aws_db_instance" "rds" {
+  identifier           = var.cluster_identifier
+  engine               = "postgres"
+  engine_version       = "15.12"
+  instance_class       = "db.t3.micro" # Free Tier eligible
+  allocated_storage     = 20
+  storage_type         = "gp2"
+  db_name              = var.db_name
+  username             = var.db_username
+  password             = random_password.db_password.result
+  db_subnet_group_name = aws_db_subnet_group.rds.name
+  vpc_security_group_ids = [aws_security_group.rds.id]
+  skip_final_snapshot  = true
+  publicly_accessible  = true
   
+  # RDS Data API for standard RDS (requires specific versions)
+  # This might not be supported in all regions or account types via Terraform yet
+  # but enabling it if the provider version supports it.
+  # If it causes errors, we will fall back to standard connections.
+  # enable_http_endpoint = true 
+
   tags = {
     Project = "sentinel"
     Part    = "5"
   }
 }
 
-resource "aws_rds_cluster_instance" "aurora" {
-  identifier           = "${var.cluster_identifier}-instance-1"
-  cluster_identifier   = aws_rds_cluster.aurora.id
-  instance_class       = "db.serverless"
-  engine               = aws_rds_cluster.aurora.engine
-  engine_version       = aws_rds_cluster.aurora.engine_version
-  db_subnet_group_name = aws_db_subnet_group.aurora.name
-
-  performance_insights_enabled = false  # Save costs in development
-  
-  tags = {
-    Project = "sentinel"
-    Part    = "5"
-  }
-}
-
-# IAM role for Lambda to access Aurora Data API
-resource "aws_iam_role" "lambda_aurora_role" {
-  name = "sentinel-lambda-aurora-role"
+# IAM role for Lambda to access RDS (both Data API and standard RDS)
+resource "aws_iam_role" "lambda_rds_role" {
+  name = "sentinel-lambda-rds-role"
   
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -161,10 +146,10 @@ resource "aws_iam_role" "lambda_aurora_role" {
   }
 }
 
-# IAM policy for Data API access
-resource "aws_iam_role_policy" "lambda_aurora_policy" {
-  name = "sentinel-lambda-aurora-policy"
-  role = aws_iam_role.lambda_aurora_role.id
+# IAM policy for RDS access
+resource "aws_iam_role_policy" "lambda_rds_policy" {
+  name = "sentinel-lambda-rds-policy"
+  role = aws_iam_role.lambda_rds_role.id
   
   policy = jsonencode({
     Version = "2012-10-17"
@@ -178,7 +163,7 @@ resource "aws_iam_role_policy" "lambda_aurora_policy" {
           "rds-data:CommitTransaction",
           "rds-data:RollbackTransaction"
         ]
-        Resource = aws_rds_cluster.aurora.arn
+        Resource = aws_db_instance.rds.arn
       },
       {
         Effect = "Allow"
@@ -202,6 +187,6 @@ resource "aws_iam_role_policy" "lambda_aurora_policy" {
 
 # Attach basic Lambda execution role
 resource "aws_iam_role_policy_attachment" "lambda_basic" {
-  role       = aws_iam_role.lambda_aurora_role.name
+  role       = aws_iam_role.lambda_rds_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }

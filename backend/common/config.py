@@ -18,7 +18,9 @@ if load_dotenv is not None:
 
 
 def is_local() -> bool:
-    """Return True when running outside AWS (no Aurora ARNs configured)."""
+    """Return True if ENVIRONMENT=local or if no Aurora ARNs are configured."""
+    if os.getenv("ENVIRONMENT", "").strip().lower() == "local":
+        return True
     return not (os.getenv("AURORA_CLUSTER_ARN", "").strip() and os.getenv("AURORA_SECRET_ARN", "").strip())
 
 

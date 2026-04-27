@@ -10,7 +10,7 @@ variable "frontend_bucket_name" {
 
 variable "api_lambda_zip" {
   type    = string
-  default = "../../backend/api/api_lambda.zip"
+  default = "../../../backend/api/api_lambda.zip"
 }
 
 variable "api_lambda_name" {

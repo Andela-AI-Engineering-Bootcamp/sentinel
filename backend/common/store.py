@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import json
 import sqlite3
 import threading
 import uuid
+import pg8000.dbapi
+import pg8000
 from datetime import datetime, timezone
 from typing import Any
 
@@ -1578,13 +1581,120 @@ class Database(_SentinelDb):
         """No persistent connection to close for Data API client."""
 
 
+class PostgresDatabase(_SentinelDb):
+    """Standard PostgreSQL backend using pg8000 (standard connection)."""
+
+    def __init__(self, database_name: str | None = None) -> None:
+        self.host = os.getenv("AURORA_CLUSTER_ENDPOINT", "").strip()
+        self.database = (database_name or aurora_database()).strip() or "sentinel"
+        self.user = os.getenv("DB_USERNAME", "sentinel_admin").strip()
+        self.password = os.getenv("DB_PASSWORD", "").strip()
+        self.port = int(os.getenv("DB_PORT", "5432"))
+
+        if not self.host:
+            raise ValueError("Postgres host not configured. Set AURORA_CLUSTER_ENDPOINT.")
+
+        self._conn = pg8000.dbapi.connect(
+            host=self.host,
+            database=self.database,
+            user=self.user,
+            password=self.password,
+            port=self.port,
+            timeout=30,
+        )
+
+    def _query(
+        self,
+        sql: str,
+        params: dict[str, Any] | None = None,
+        *,
+        transaction_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        # Convert :name to %s for pg8000
+        converted_sql = sql
+        param_values = []
+        if params:
+            for name, value in params.items():
+                pattern = f":{name}"
+                if pattern in converted_sql:
+                    converted_sql = converted_sql.replace(pattern, "%s")
+                    param_values.append(value)
+        
+        cur = self._conn.cursor()
+        try:
+            cur.execute(converted_sql, param_values)
+            cols = [desc[0] for desc in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+        finally:
+            cur.close()
+
+    def _query_one(
+        self,
+        sql: str,
+        params: dict[str, Any] | None = None,
+        *,
+        transaction_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        rows = self._query(sql, params)
+        return rows[0] if rows else None
+
+    def _execute(
+        self,
+        sql: str,
+        params: dict[str, Any] | None = None,
+        *,
+        transaction_id: str | None = None,
+    ) -> int:
+        converted_sql = sql
+        param_values = []
+        if params:
+            for name, value in params.items():
+                pattern = f":{name}"
+                if pattern in converted_sql:
+                    converted_sql = converted_sql.replace(pattern, "%s")
+                    param_values.append(value)
+        
+        cur = self._conn.cursor()
+        try:
+            cur.execute(converted_sql, param_values)
+            self._conn.commit()
+            return cur.rowcount
+        finally:
+            cur.close()
+
+    def execute_script(self, statements: list[str]) -> None:
+        cur = self._conn.cursor()
+        try:
+            for stmt in statements:
+                if stmt.strip():
+                    cur.execute(stmt)
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        finally:
+            cur.close()
+
+    def close(self) -> None:
+        self._conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
 
 def get_database() -> _SentinelDb:
-    """Return a SqliteDatabase locally or an Aurora Database in production."""
+    """Return a SqliteDatabase locally or an RDS Database in production."""
     if is_local():
         return SqliteDatabase()
-    return Database()
+    
+    use_data_api = os.getenv("USE_DATA_API", "true").lower() == "true"
+    if use_data_api:
+        try:
+            return Database()
+        except Exception:
+            # Fallback to standard connection if Data API init fails
+            return PostgresDatabase()
+    
+    return PostgresDatabase()

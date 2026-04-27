@@ -1,5 +1,12 @@
 terraform {
   required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
 }
 
 provider "aws" {
@@ -119,6 +126,7 @@ resource "aws_lambda_function" "agents" {
       AURORA_CLUSTER_ARN        = var.aurora_cluster_arn
       AURORA_SECRET_ARN         = var.aurora_secret_arn
       AURORA_DATABASE           = var.aurora_database
+      AURORA_CLUSTER_ENDPOINT   = var.aurora_cluster_endpoint
       SQS_QUEUE_URL             = aws_sqs_queue.jobs.id
     }
   }

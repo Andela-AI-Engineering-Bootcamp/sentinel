@@ -358,6 +358,28 @@ def health() -> dict[str, str]:
     return {"status": "ok", "service": "sentinel-api"}
 
 
+@app.post("/api/admin/migrate")
+def run_migrations(user: AuthContext = Depends(require_auth)) -> dict[str, Any]:
+    """Manually trigger database migrations (useful for initial RDS setup)."""
+    # Simple security check
+    if user.user_id != os.getenv("ADMIN_USER_ID", user.user_id):
+        raise HTTPException(status_code=403, detail="Admin only")
+    
+    from database.src.db import migration_file, load_sql_statements
+    
+    db = get_database()
+    try:
+        path = migration_file()
+        statements = load_sql_statements(path)
+        db.execute_script(statements)
+        return {"status": "success", "statements_applied": len(statements)}
+    except Exception as e:
+        logger.exception("Migration failed")
+        return {"status": "error", "detail": str(e)}
+    finally:
+        db.close()
+
+
 @app.get("/api/me")
 def me(user: AuthContext = Depends(require_auth)) -> dict[str, Any]:
     entitlements = get_user_entitlements(user)

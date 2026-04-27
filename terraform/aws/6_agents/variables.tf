@@ -21,14 +21,18 @@ variable "aurora_database" {
   default = "sentinel"
 }
 
+variable "aurora_cluster_endpoint" {
+  type = string
+}
+
 variable "lambda_zip_paths" {
   type = map(string)
   default = {
-    planner      = "../../backend/planner/planner_lambda.zip"
-    normalizer   = "../../backend/normalizer/normalizer_lambda.zip"
-    summarizer   = "../../backend/summarizer/summarizer_lambda.zip"
-    investigator = "../../backend/investigator/investigator_lambda.zip"
-    remediator   = "../../backend/remediator/remediator_lambda.zip"
+    planner      = "../../../backend/planner/planner_lambda.zip"
+    normalizer   = "../../../backend/normalizer/normalizer_lambda.zip"
+    summarizer   = "../../../backend/summarizer/summarizer_lambda.zip"
+    investigator = "../../../backend/investigator/investigator_lambda.zip"
+    remediator   = "../../../backend/remediator/remediator_lambda.zip"
   }
 }
 
