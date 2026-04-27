@@ -124,7 +124,8 @@ def _converse_json_bedrock(
         content = response["output"]["message"]["content"][0].get("text", "{}").strip()
         return json.loads(content)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Bedrock converse failed; falling back to heuristics: %s", exc)
+        print(f"Bedrock converse failed for model {model_id}: {exc}")
+        logger.error("Bedrock converse failed for model %s: %s", model_id, exc)
         return None
 
 
@@ -267,7 +268,7 @@ def converse_stream_chat(
 
     ``messages`` is a list of ``{"role": "user"|"assistant", "content": str}`` dicts.
     The model is resolved from ``active_model()`` — set via OPENROUTER_MODEL or
-    BEDROCK_MODEL_ID depending on which backend is enabled.
+    BEDROCK_MODEL_ID (default: anthropic.claude-3-haiku-20240307-v1:0) depending on which backend is enabled.
     """
     model_id = active_model()
     if use_openrouter():

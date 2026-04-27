@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import zipfile
+import boto3
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -98,6 +99,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+ 
+sqs = boto3.client("sqs")
+SQS_QUEUE_URL = os.getenv("SQS_QUEUE_URL")
 
 
 def _db() -> Database:
@@ -524,7 +528,19 @@ def create_incident(
         incident_id, job_id = create_incident_and_job(
             payload, db, clerk_user_id=user.user_id
         )
-        background_tasks.add_task(_background_run_job, job_id, user.user_id)
+        if SQS_QUEUE_URL:
+            try:
+                sqs.send_message(
+                    QueueUrl=SQS_QUEUE_URL,
+                    MessageBody=json.dumps({"job_id": job_id})
+                )
+            except Exception as e:
+                logger.error(f"Failed to send to SQS: {e}")
+                # Fallback to local background task if SQS fails
+                background_tasks.add_task(_background_run_job, job_id, user.user_id)
+        else:
+            background_tasks.add_task(_background_run_job, job_id, user.user_id)
+
         return JobCreateResponse(
             incident_id=incident_id, job_id=job_id, status="pending"
         )
@@ -883,6 +899,8 @@ async def stream_job_events(
     """Server-Sent Events for pipeline stage updates (polls SQLite; use Authorization header with fetch streams)."""
 
     async def event_source() -> Any:
+        # Send an immediate heartbeat to satisfy API Gateway's 29s timeout
+        yield f"data: {json.dumps({'event': 'connected', 'status': 'waiting_for_planner'})}\n\n"
         last_len = 0
         while True:
             db = _db()

@@ -58,6 +58,23 @@ def _write_dependencies(zf: zipfile.ZipFile) -> None:
             zf.write(path, path.relative_to(TEMP_PKG_DIR).as_posix())
 
 
+# All core feature modules that might be inter-imported
+CORE_MODULES = [
+    "planner",
+    "normalizer",
+    "summarizer",
+    "investigator",
+    "remediator",
+    "comparator",
+    "replay",
+    "integrations",
+    "common",
+    "reports",
+    "scheduler",
+    "database",
+]
+
+
 def _build_agent(agent: str) -> Path:
     agent_dir = ROOT / agent
     out = agent_dir / f"{agent}_lambda.zip"
@@ -69,8 +86,9 @@ def _build_agent(agent: str) -> Path:
             path = agent_dir / file_name
             if path.exists():
                 zf.write(path, file_name)
-        _write_common(zf)
-        _write_integrations(zf)
+        # Bundle all core modules as they are cross-imported
+        for mod in CORE_MODULES:
+            _write_extra_dir(zf, mod)
         _write_dependencies(zf)
 
     return out
@@ -86,12 +104,9 @@ def _build_dir_zip(source_dir: Path, zip_name: str, files: list[str]) -> Path:
             path = source_dir / file_name
             if path.exists():
                 zf.write(path, f"{source_dir.name}/{file_name}")
-        _write_common(zf)
-        _write_integrations(zf)
-        if source_dir.name == "api":
-            _write_extra_dir(zf, "investigator")
-            _write_extra_dir(zf, "comparator")
-            _write_extra_dir(zf, "replay")
+        # Always bundle all core modules for API/Ingest zips
+        for mod in CORE_MODULES:
+            _write_extra_dir(zf, mod)
         _write_dependencies(zf)
 
     return out

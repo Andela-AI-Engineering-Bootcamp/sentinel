@@ -165,6 +165,13 @@ resource "aws_iam_role_policy" "api_lambda_aurora_data_api" {
         ]
         Resource = "*"
       },
+      {
+        Effect = "Allow"
+        Action = [
+          "sqs:SendMessage",
+        ]
+        Resource = data.terraform_remote_state.agents.outputs.sqs_queue_arn
+      },
     ]
   })
 }

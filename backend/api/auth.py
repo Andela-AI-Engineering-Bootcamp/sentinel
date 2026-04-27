@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -13,6 +14,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 bearer_scheme = HTTPBearer(auto_error=False)
 _jwks_client: jwt.PyJWKClient | None = None
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -77,6 +79,7 @@ def verify_clerk_token(token: str) -> dict:
         decode_kwargs: dict = {
             "algorithms": ["RS256"],
             "options": {"verify_aud": False},
+            "leeway": 60,
         }
 
         issuer = os.getenv("CLERK_ISSUER", "").strip().rstrip("/")
@@ -86,6 +89,7 @@ def verify_clerk_token(token: str) -> dict:
 
         payload = jwt.decode(token, signing_key, **decode_kwargs)
     except Exception as exc:  # noqa: BLE001
+        logger.error(f"Token verification failed for token {token[:10]}...: {exc}")
         raise AuthError(f"Token verification failed: {exc}") from exc
 
     subject = payload.get("sub")

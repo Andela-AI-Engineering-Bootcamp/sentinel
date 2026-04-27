@@ -1594,6 +1594,17 @@ class PostgresDatabase(_SentinelDb):
         if not self.host:
             raise ValueError("Postgres host not configured. Set AURORA_CLUSTER_ENDPOINT.")
 
+        # Fallback to Secrets Manager if password is missing in env
+        if not self.password and aurora_secret_arn():
+            try:
+                client = boto3.client("secretsmanager", region_name=aurora_region())
+                resp = client.get_secret_value(SecretId=aurora_secret_arn())
+                creds = json.loads(resp["SecretString"])
+                self.user = creds.get("username", self.user)
+                self.password = creds.get("password", "")
+            except Exception as exc:
+                print(f"Failed to fetch DB credentials from secret: {exc}")
+
         self._conn = pg8000.dbapi.connect(
             host=self.host,
             database=self.database,
@@ -1691,6 +1702,12 @@ def get_database() -> _SentinelDb:
     
     use_data_api = os.getenv("USE_DATA_API", "true").lower() == "true"
     if use_data_api:
+        # Check if the ARN looks like an Aurora Cluster (contains ':cluster:')
+        # If it's a DB Instance ARN (contains ':db:'), Data API is definitely not supported.
+        arn = aurora_cluster_arn()
+        if ":db:" in arn and ":cluster:" not in arn:
+            return PostgresDatabase()
+
         try:
             return Database()
         except Exception:

@@ -114,6 +114,7 @@ resource "aws_lambda_function" "agents" {
   runtime       = "python3.12"
   handler       = each.value.handler
   filename      = var.lambda_zip_paths[each.key]
+  source_code_hash = filebase64sha256(var.lambda_zip_paths[each.key])
   timeout       = each.value.timeout
   memory_size   = each.value.memory
 
@@ -128,6 +129,7 @@ resource "aws_lambda_function" "agents" {
       AURORA_DATABASE           = var.aurora_database
       AURORA_CLUSTER_ENDPOINT   = var.aurora_cluster_endpoint
       SQS_QUEUE_URL             = aws_sqs_queue.jobs.id
+      USE_BEDROCK               = "true"
     }
   }
 

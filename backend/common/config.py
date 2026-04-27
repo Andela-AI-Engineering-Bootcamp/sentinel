@@ -63,7 +63,9 @@ def aurora_region() -> str:
 
 
 def use_bedrock() -> bool:
-    return os.getenv("USE_BEDROCK", "false").lower() == "true"
+    # Default to True in production if not explicitly False
+    val = os.getenv("USE_BEDROCK", "true").lower()
+    return val == "true"
 
 
 def bedrock_region() -> str:
@@ -98,7 +100,7 @@ def active_model() -> str:
     """
     if use_openrouter():
         return openrouter_model()
-    return os.getenv("BEDROCK_MODEL_ID", "eu.amazon.nova-pro-v1:0")
+    return os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-3-haiku-20240307-v1:0")
 
 
 def reminder_interval_seconds() -> int:

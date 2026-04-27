@@ -18,16 +18,19 @@ def _job_id_from_record(record: dict) -> str | None:
 
 
 def lambda_handler(event, context):
+    print(f"Received event: {json.dumps(event)}")
     db = get_database()
     results: list[dict] = []
 
     if "Records" in event:
         for record in event["Records"]:
             job_id = _job_id_from_record(record)
+            print(f"Processing job_id from SQS: {job_id}")
             if not job_id:
                 results.append({"status": "failed", "error": "Missing job_id in SQS message"})
                 continue
             run_result = run_job(job_id, db)
+            print(f"Run result: {run_result}")
             results.append(run_result.model_dump())
         return {"results": results}
 

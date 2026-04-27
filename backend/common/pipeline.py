@@ -232,6 +232,7 @@ def run_job(
             logger.warning("Integration dispatch failed; continuing")
 
         db.set_job_stage(job_id, "completed", "Analysis ready")
+        db.update_job_status(job_id, "completed")
         return JobRunResponse(
             incident_id=row["incident_id"],
             job_id=job_id,
