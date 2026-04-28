@@ -1,6 +1,6 @@
 # Sentinel
 
-**Sentinel** is an AI-powered incident intelligence platform. It turns raw logs and incident narratives into structured analysis—summaries, severity, likely root cause, evidence-grounded remediation, and exportable reports—so teams can respond faster with less manual triage.
+**Sentinel** is an AI-powered incident intelligence platform. It turns raw logs and incident narratives into structured analysis and summaries, severity, likely root cause, evidence-grounded remediation, and exportable reports, so teams can respond faster with less manual triage.
 
 <p align="center">
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+"></a>
